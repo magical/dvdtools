@@ -20,20 +20,23 @@ static const char* audio_formats[] =
 static const int bitrates[] = {16, 20, 24, -1};
 static const char* sample_rates[] = {"48Hz", "96Hz"};
 static const char* channels[] = {"mono", "2ch", "3ch", "4ch", "5ch", "5.1ch", "7ch", "8ch"};
+static const int stream_ids[] = {0x80, 0, 0xc0, 0xc0, 0xa0, 0, 0x88, 0};
 
 int print_audio(audio_attr_t *a, int n)
 {
 	if (a->audio_format == 4) {
-		return printf("%d: %s %s %d %s\n", n,
+		return printf("%d: %s %s %d %s %#02x\n", n,
 			audio_formats[a->audio_format],
 			channels[a->channels],
 			bitrates[a->quantization],
-			sample_rates[a->sample_frequency]);
+			sample_rates[a->sample_frequency],
+			stream_ids[a->audio_format]+n);
 	} else {
-		return printf("%d: %s %s %s\n", n,
+		return printf("%d: %s %s %s %#02x\n", n,
 			audio_formats[a->audio_format],
 			channels[a->channels],
-			sample_rates[a->sample_frequency]);
+			sample_rates[a->sample_frequency],
+			stream_ids[a->audio_format]+n);
 	}
 }
 
