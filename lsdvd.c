@@ -86,15 +86,18 @@ error:
 	return -1;
 }
 
-int get_pts(dvd_reader_t *dvd, int title, int sector, u64 *ptsp)
+int get_pts(dvd_reader_t *dvd, int title, int sector, u64 *ptsp, int skip)
 {
 	dvd_file_t *vob = DVDOpenFile(dvd, title, DVD_READ_TITLE_VOBS);
 	if (vob == NULL) { return -1; }
 
 	u8 b[BLOCK_SIZE];
-	if (DVDReadBlocks(vob, sector, 1, b) < 1) { goto error; }
-	int async = b[0x59a];
-	for (int try = 0; try < 10; try++) {
+	int async = 0;
+	if (skip) {
+		if (DVDReadBlocks(vob, sector, 1, b) < 1) { goto error; }
+		async = b[0x59a];
+	}
+	for (int try = 0; try < 150; try++) {
 		if (DVDReadBlocks(vob, sector+async+try, 1, b) < 1) { goto error; }
 		if (b[0] != 0 || b[1] != 0 || b[2] != 1 || b[3] != 0xba) {
 			printf("get_pts: %d,%d: %02x%02x%02x%02x\n", title, sector+async+try, b[0], b[1], b[2], b[3]);
@@ -137,20 +140,19 @@ int main(int argc, char *argv[])
 	if (dvd == NULL) { die("Unable to open dvd"); }
 	ifo_handle_t *ifo0 = ifoOpen(dvd, 0);
 	if (ifo0 == NULL) { die("Unable to open VIDEO_TS.IFO"); }
-	//int titles = ifo0->tt_srpt->nr_of_srpts;
-	int titles = ifo0->vmgi_mat->vmg_nr_of_title_sets;
+	int titles = ifo0->tt_srpt->nr_of_srpts;
+	//int titles = ifo0->vmgi_mat->vmg_nr_of_title_sets;
 
 	for (int i = 0; i < titles; i++) {
-		printf("title %d\n", i+1);
-		//int title_set_nr = ifo0->tt_srpt->title[i].title_set_nr;
-		//printf("title set %d\n", title_set_nr);
-		ifo_handle_t *ifo = ifoOpen(dvd, i+1);
+		int title = ifo0->tt_srpt->title[i].title_set_nr;
+		int chapters = ifo0->tt_srpt->title[i].nr_of_ptts;
+		printf("title %d\n", title);
+		printf("chapters: %d\n", chapters);
+		printf("vts_ttn %d\n", ifo0->tt_srpt->title[i].vts_ttn);
+		ifo_handle_t *ifo = ifoOpen(dvd, title);
 		if (ifo == NULL) {
 			continue;
 		}
-
-		int chapters = ifo->vts_pgcit->pgci_srp->pgc->nr_of_programs;
-		printf("chapters: %d\n", chapters);
 
 		vtsi_mat_t *v = ifo->vtsi_mat;
 		for (int j = 0; j < v->nr_of_vts_audio_streams; j++) {
@@ -160,23 +162,28 @@ int main(int argc, char *argv[])
 		u64 last_scr = 0, last_pts = 0;
 		for (int j = 0; j < ifo->vts_pgcit->nr_of_pgci_srp; j++) {
 			pgc_t *pgc = ifo->vts_pgcit->pgci_srp[j].pgc;
+			printf("%d: programs: %d\n", j, pgc->nr_of_programs);
 			for (int k = 0; k < pgc->nr_of_cells; k++) {
 				cell_playback_t *pb = &pgc->cell_playback[k];
 				/*printf("%d,%d: %d\n", j, k,
 					1 + pb->last_sector - pb->first_sector);
 				*/
-				u64 scr, pts;
-				if (get_scr(dvd, i+1, pb->first_sector, &scr) >= 0 &&
-				    get_pts(dvd, i+1, pb->first_sector, &pts) >= 0) {
+				u64 scr, pts0, pts;
+				if (get_scr(dvd, title, pb->first_sector, &scr) >= 0 &&
+				    get_pts(dvd, title, pb->first_sector, &pts0, 0) >= 0 &&
+				    get_pts(dvd, title, pb->first_sector, &pts, 1) >= 0) {
 					struct time t = time_from_scr(scr);
 					struct time len = time_from_scr(scr - last_scr);
 					printf("%d,%d: %llu ", j, k, scr);
 					printf("%f ", (scr-last_scr) * 96 / 27e3);
 					printf("%f ", (pts-last_pts) * 96 / 90.0);
+					printf("%llu ", pts - pts0);
 					printf("%u:%02u:%06.3f ", t.hour, t.min, t.sec + t.nano / 1e9);
 					printf("%u:%02u:%06.3f\n", len.hour, len.min, len.sec + len.nano / 1e9);
 					last_scr = scr;
 					last_pts = pts;
+				} else {
+					//printf("%d,%d\n", j, k);
 				}
 			}
 		}
