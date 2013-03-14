@@ -233,15 +233,18 @@ int main(int argc, char *argv[])
 				}
 				t = time_from_scr(scr);
 				d = time_from_scr(scr - last_scr);
-				printf("%d,%d: ", j, k);
-				printf("%llu (%u:%02u:%06.3f) ", scr,
+				printf("%d,%d:", j, k);
+				printf(" %llu (%u:%02u:%06.3f)", scr,
 					t.hour, t.min, t.sec + t.nano / 1e9);
-				printf("%llu (%u:%02u:%06.3f)\n", scr - last_scr,
-					d.hour, d.min, d.sec + d.nano / 1e9);
+				if (last_scr <= scr) {
+					printf(" %10llu (%u:%02u:%06.3f)", scr - last_scr,
+						d.hour, d.min, d.sec + d.nano / 1e9);
+				}
+				printf("\n");
 				for (int a = 0; a < v->nr_of_vts_audio_streams; a++) {
 					int audio_sector = get_audio_sector(vob, (int)pb->first_sector, a);
 					if (audio_sector < 0) {
-						printf("%d,%d: couldn't get audio sector %d\n", j, k, a);
+						printf("%d,%d: couldn't get sector for audio stream %d\n", j, k, a);
 						continue;
 					}
 					int e;
@@ -252,12 +255,15 @@ int main(int argc, char *argv[])
 					}
 					t = time_from_pts(pts);
 					d = time_from_pts(pts - last_pts[a]);
-					printf("%d,%d,%d: ", j, k, a);
-					printf("%d ", audio_sector);
-					printf("%llu (%u:%02u:%06.3f) ", pts,
+					printf("%d,%d,%d:", j, k, a);
+					printf(" %6d", audio_sector);
+					printf(" %10llu (%u:%02u:%06.3f)", pts,
 						t.hour, t.min, t.sec + t.nano / 1e9);
-					printf("%llu (%u:%02u:%06.3f)\n", pts - last_pts[a],
-						d.hour, d.min, d.sec + d.nano / 1e9);
+					if (last_pts[a] <= pts) {
+						printf(" %10llu (%u:%02u:%06.3f)", pts - last_pts[a],
+							d.hour, d.min, d.sec + d.nano / 1e9);
+					}
+					printf("\n");
 					last_pts[a] = pts;
 				}
 				last_scr = scr;
