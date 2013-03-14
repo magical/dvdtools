@@ -59,6 +59,9 @@ struct time time_from_scr(u64 scr) {
 	return t;
 }
 
+struct time time_from_pts(u64 pts) {
+	return time_from_scr(pts*300);
+}
 
 // Return the stream id associated with a pack. If private is true and the
 // packet is private stream 1, return the stream id of the private stream.
@@ -213,48 +216,51 @@ int main(int argc, char *argv[])
 			print_audio(&v->vts_audio_attr[j], j);
 		}
 
-		u64 last_scr = 0, last_pts = 0;
+		u64 last_scr = 0;
+		u64 last_pts[8] = {0};
+		struct time t, d;
 		for (int j = 0; j < ifo->vts_pgcit->nr_of_pgci_srp; j++) {
 			pgc_t *pgc = ifo->vts_pgcit->pgci_srp[j].pgc;
 			printf("%d: programs: %d\n", j, pgc->nr_of_programs);
 			for (int k = 0; k < pgc->nr_of_cells; k++) {
 				cell_playback_t *pb = &pgc->cell_playback[k];
-				/*printf("%d,%d: %d\n", j, k,
-					1 + pb->last_sector - pb->first_sector);
-				*/
-				int audio_sector = get_audio_sector(vob, pb->first_sector, 0);
-				if (audio_sector < 0) {
-					printf("%d,%d: couldn't get audio sector\n", j, k);
-					continue;
-				}
-				u64 scr, pts0, pts;
-				sectorbuf b0, b1, b2;
+				u64 scr, pts;
+				sectorbuf b0, b2;
 				if (DVDReadBlocks(vob, pb->first_sector, 1, b0) < 1 ||
 				    get_scr(b0, &scr) < 0) {
 					printf("%d,%d: couldn't get scr\n", j, k);
 					continue;
 				}
-				if (find_audio_stream(vob, pb->first_sector, b1) < 0 ||
-				    get_pts(b1, &pts0) < 0) {
-					printf("%d,%d: couldn't get pts0\n", j, k);
-					continue;
+				t = time_from_scr(scr);
+				d = time_from_scr(scr - last_scr);
+				printf("%d,%d: ", j, k);
+				printf("%llu (%u:%02u:%06.3f) ", scr,
+					t.hour, t.min, t.sec + t.nano / 1e9);
+				printf("%llu (%u:%02u:%06.3f)\n", scr - last_scr,
+					d.hour, d.min, d.sec + d.nano / 1e9);
+				for (int a = 0; a < v->nr_of_vts_audio_streams; a++) {
+					int audio_sector = get_audio_sector(vob, pb->first_sector, a);
+					if (audio_sector < 0) {
+						printf("%d,%d: couldn't get audio sector %d\n", j, k, a);
+						continue;
+					}
+					int e;
+					if ((e = DVDReadBlocks(vob, audio_sector, 1, b2)) < 1 ||
+					    get_pts(b2, &pts) < 0) {
+						printf("%d,%d,%d: couldn't get pts: %d\n", j, k, a, e);
+						continue;
+					}
+					t = time_from_pts(pts);
+					d = time_from_pts(pts - last_pts[a]);
+					printf("%d,%d,%d: ", j, k, a);
+					printf("%d ", audio_sector);
+					printf("%llu (%u:%02u:%06.3f) ", pts,
+						t.hour, t.min, t.sec + t.nano / 1e9);
+					printf("%llu (%u:%02u:%06.3f)\n", pts - last_pts[a],
+						d.hour, d.min, d.sec + d.nano / 1e9);
+					last_pts[a] = pts;
 				}
-				int e;
-				if ((e = DVDReadBlocks(vob, audio_sector, 1, b2)) < 1 ||
-				    get_pts(b2, &pts) < 0) {
-					printf("%d,%d: couldn't get pts: %d\n", j, k, e);
-					continue;
-				}
-				struct time t = time_from_scr(scr);
-				struct time len = time_from_scr(scr - last_scr);
-				printf("%d,%d: %llu ", j, k, scr);
-				printf("%f ", (scr-last_scr) * 96 / 27000.0);
-				printf("%f ", (pts-last_pts) * 96 / 90.0);
-				printf("%llu ", pts - pts0);
-				printf("%u:%02u:%06.3f ", t.hour, t.min, t.sec + t.nano / 1e9);
-				printf("%u:%02u:%06.3f\n", len.hour, len.min, len.sec + len.nano / 1e9);
 				last_scr = scr;
-				last_pts = pts;
 			}
 		}
 		DVDCloseFile(vob);
