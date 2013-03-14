@@ -50,9 +50,9 @@ struct time {
 
 struct time time_from_scr(u64 scr) {
 	struct time t;
-	uint frac = scr % 27000000;
-	uint sec = scr / 27000000;
-	t.nano = frac * (1e9 / 27e6);
+	uint frac = (uint)(scr % 27000000);
+	uint sec = (uint)(scr / 27000000);
+	t.nano = (uint)(frac * (1e9 / 27e6));
 	t.sec = sec % 60;
 	t.min = (sec / 60) % 60;
 	t.hour = sec / 3600;
@@ -148,13 +148,13 @@ int get_scr(sectorbuf b, u64 *scrp)
 	if (pack_stream_id(b, false) == -1) {
 		return -1;
 	}
-	u64 scr = ((b[4] & 0x38) >> 3 << 30) |
-	          ((b[4] & 3) << 28) |
-	          (b[5] << 20) |
-	          (b[6] >> 3 << 15) |
-	          ((b[6] & 3) << 13) |
-	          (b[7] << 5) |
-	          (b[8] >> 3);
+	u64 scr = ((u64)(b[4] & 0x38) >> 3 << 30) |
+	          ((u64)(b[4] & 3) << 28) |
+	          ((u64)b[5] << 20) |
+	          ((u64)b[6] >> 3 << 15) |
+	          ((u64)(b[6] & 3) << 13) |
+	          ((u64)b[7] << 5) |
+	          ((u64)b[8] >> 3);
 	uint scr_ext = (((uint)b[8] & 3) << 7) |
 	               ((uint)b[9] >> 1);
 	scr = scr * 300 + scr_ext;
@@ -226,7 +226,7 @@ int main(int argc, char *argv[])
 				cell_playback_t *pb = &pgc->cell_playback[k];
 				u64 scr, pts;
 				sectorbuf b0, b2;
-				if (DVDReadBlocks(vob, pb->first_sector, 1, b0) < 1 ||
+				if (DVDReadBlocks(vob, (int)pb->first_sector, 1, b0) < 1 ||
 				    get_scr(b0, &scr) < 0) {
 					printf("%d,%d: couldn't get scr\n", j, k);
 					continue;
@@ -239,7 +239,7 @@ int main(int argc, char *argv[])
 				printf("%llu (%u:%02u:%06.3f)\n", scr - last_scr,
 					d.hour, d.min, d.sec + d.nano / 1e9);
 				for (int a = 0; a < v->nr_of_vts_audio_streams; a++) {
-					int audio_sector = get_audio_sector(vob, pb->first_sector, a);
+					int audio_sector = get_audio_sector(vob, (int)pb->first_sector, a);
 					if (audio_sector < 0) {
 						printf("%d,%d: couldn't get audio sector %d\n", j, k, a);
 						continue;
