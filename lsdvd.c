@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdbool.h>
 #include <dvdread/dvd_reader.h>
 #include <dvdread/ifo_read.h>
 
@@ -58,35 +59,10 @@ struct time time_from_scr(u64 scr) {
 	return t;
 }
 
-int get_scr(dvd_reader_t *dvd, int title, int sector, u64 *scrp)
-{
-	dvd_file_t *vob = DVDOpenFile(dvd, title, DVD_READ_TITLE_VOBS);
-	if (vob == NULL) { return -1; }
-	sectorbuf b;
-	if (DVDReadBlocks(vob, sector, 1, b) < 0) { goto error; }
-	if (b[0] != 0 || b[1] != 0 || b[2] != 1 || b[3] != 0xba) {
-		printf("get_scr: %d,%d: %02x%02x%02x%02x\n", title, sector, b[0], b[1], b[2], b[3]);
-		goto error;
-	}
-	u64 scr = ((b[4] & 0x38) >> 3 << 30) |
-	          ((b[4] & 3) << 28) |
-	          (b[5] << 20) |
-	          (b[6] >> 3 << 15) |
-	          ((b[6] & 3) << 13) |
-	          (b[7] << 5) |
-	          (b[8] >> 3);
-	uint scr_ext = (((uint)b[8] & 3) << 7) |
-	               ((uint)b[9] >> 1);
-	scr = scr * 300 + scr_ext;
-	*scrp = scr;
-	DVDCloseFile(vob);
-	return 0;
-error:
-	DVDCloseFile(vob);
-	return -1;
-}
 
-int pack_stream_id(sectorbuf b)
+// Return the stream id associated with a pack. If private is true and the
+// packet is private stream 1, return the stream id of the private stream.
+int pack_stream_id(sectorbuf b, bool private)
 {
 	// Theoretically, each pack only contains a single stream, so we
 	// shouldn't have to look beyond the first packet.
@@ -97,7 +73,7 @@ int pack_stream_id(sectorbuf b)
 	if (p[0] != 0 || p[1] != 0 || p[2] != 1) {
 		return -1; // not a packet
 	}
-	if (p[3] == 0xbd) {
+	if (private && p[3] == 0xbd) {
 		// private stream
 		return p[9+p[8]];
 	}
@@ -110,74 +86,96 @@ int get_audio_sector(dvd_file_t *vob, int sector, int index)
 {
 	sectorbuf b;
 	if (DVDReadBlocks(vob, sector, 1, b) < 1) { return -1; }
-	if (pack_stream_id(b) != 0xbb) {
+	if (pack_stream_id(b, true) != 0xbb) {
 		// Not a NAV
-		printf("not a nav: %#x\n", pack_stream_id(b));
+		printf("not a nav: %#x\n", pack_stream_id(b, true));
 		return -1;
 	}
 	// Read the a_async value for the requested stream.
 	// Should probably just use nav_read.c.
 	u8 *p = b + 0x599 + index*2;
 	int n = (p[0] & 0x7f) << 8 | p[1];
+	if (n == 0 || n == 0x3fff) {
+		return -1;
+	}
 	if (p[0] & 0x80) {
 		return sector - n;
 	}
 	return sector + n;
 }
 
-#define MAX_TRIES 10
+#define MAX_TRIES 150
 
 // Scan for the first packet with the given stream id, starting at sector.
+// Returns the sector number and reads the sector into b.
 // Returns -1 if the stream is not found within the maximum number of tries,
-// or DVDReadBlock fails.
-int find_stream(dvd_file_t *vob, int sector, int stream)
+// or if DVDReadBlocks fails.
+int find_stream(dvd_file_t *vob, int sector, int stream, sectorbuf b)
 {
-	sectorbuf b;
 	for (int try = 0; try < MAX_TRIES; try++) {
 		if (DVDReadBlocks(vob, sector+try, 1, b) < 1) return -1;
-		if (pack_stream_id(b) == stream) {
+		if (pack_stream_id(b, true) == stream) {
 			return try;
 		}
 	}
 	return -1;
 }
 
-int get_pts(dvd_reader_t *dvd, int title, int sector, u64 *ptsp)
+// Scan for the first audio stream after sector.
+int find_audio_stream(dvd_file_t *vob, int sector, sectorbuf b)
 {
-	dvd_file_t *vob = DVDOpenFile(dvd, title, DVD_READ_TITLE_VOBS);
-	if (vob == NULL) { return -1; }
-
-	sectorbuf b;
-	for (int try = 0; try < 150; try++) {
-		if (DVDReadBlocks(vob, sector+try, 1, b) < 1) { goto error; }
-		if (b[0] != 0 || b[1] != 0 || b[2] != 1 || b[3] != 0xba) {
-			printf("get_pts: %d,%d: %02x%02x%02x%02x\n", title, sector+try, b[0], b[1], b[2], b[3]);
-			goto error;
+	int stream;
+	for (int try = 0; try < MAX_TRIES; try++) {
+		if (DVDReadBlocks(vob, sector+try, 1, b) < 1) return -1;
+		stream = pack_stream_id(b, false);
+		if (0xc0 <= stream && stream < 0xe0) {
+			return sector+try;
 		}
-		if (b[14] != 0 || b[15] != 0 || b[16] != 1 || b[17] != 0xbd ||
-		    (b[0x14] & 0x80) != 0x80) {
-			continue;
+		stream = pack_stream_id(b, true);
+		if ((0x80 <= stream && stream < 0x90) ||
+		    (0xa0 <= stream && stream < 0xa8)) {
+			return sector+try;
 		}
-		int code = b[0x17+b[0x16]];
-		if (!((0x80 <= code && code < 0x90) || (0xa0 <= code && code < 0xa8))) {
-			continue;
-		}
-		printf("found %#02x at %d+%d\n", code, sector, try);
-		u64 pts = ((u64)(b[23] & 0x0e) >> 1 << 30) |
-		          ((u64)b[24] << 22) |
-		          ((u64)b[25] >> 1 << 15) |
-		          ((u64)b[26] << 7) |
-		          ((u64)b[27] >> 1);
-		*ptsp = pts;
-		goto success;
 	}
-	goto error;
-
-error:
-	DVDCloseFile(vob);
 	return -1;
-success:
-	DVDCloseFile(vob);
+}
+
+int get_scr(sectorbuf b, u64 *scrp)
+{
+	if (pack_stream_id(b, false) == -1) {
+		return -1;
+	}
+	u64 scr = ((b[4] & 0x38) >> 3 << 30) |
+	          ((b[4] & 3) << 28) |
+	          (b[5] << 20) |
+	          (b[6] >> 3 << 15) |
+	          ((b[6] & 3) << 13) |
+	          (b[7] << 5) |
+	          (b[8] >> 3);
+	uint scr_ext = (((uint)b[8] & 3) << 7) |
+	               ((uint)b[9] >> 1);
+	scr = scr * 300 + scr_ext;
+	*scrp = scr;
+	return 0;
+}
+
+/* Returns -1 if the buf is not a valid packet or if no PTS is present. */
+int get_pts(sectorbuf b, u64 *ptsp)
+{
+	if (pack_stream_id(b, false) != 0xbd) {
+		printf("get_pts: not a valid packet: %#x\n", pack_stream_id(b, false));
+		return -1;
+	}
+	if ((b[0x14] & 0x80) != 0x80) {
+		// no pts present
+		return -1;
+	}
+	u64 pts = ((u64)(b[23] & 0x0e) >> 1 << 30) |
+	          ((u64)b[24] << 22) |
+	          ((u64)b[25] >> 1 << 15) |
+	          ((u64)b[26] << 7) |
+	          ((u64)b[27] >> 1);
+	*ptsp = pts;
 	return 0;
 }
 
@@ -225,24 +223,38 @@ int main(int argc, char *argv[])
 					1 + pb->last_sector - pb->first_sector);
 				*/
 				int audio_sector = get_audio_sector(vob, pb->first_sector, 0);
-				if (audio_sector < 0) continue;
-				u64 scr, pts0, pts;
-				if (get_scr(dvd, title, pb->first_sector, &scr) >= 0 &&
-				    get_pts(dvd, title, pb->first_sector, &pts0) >= 0 &&
-				    get_pts(dvd, title, audio_sector, &pts) >= 0) {
-					struct time t = time_from_scr(scr);
-					struct time len = time_from_scr(scr - last_scr);
-					printf("%d,%d: %llu ", j, k, scr);
-					printf("%f ", (scr-last_scr) * 96 / 27e3);
-					printf("%f ", (pts-last_pts) * 96 / 90.0);
-					printf("%llu ", pts - pts0);
-					printf("%u:%02u:%06.3f ", t.hour, t.min, t.sec + t.nano / 1e9);
-					printf("%u:%02u:%06.3f\n", len.hour, len.min, len.sec + len.nano / 1e9);
-					last_scr = scr;
-					last_pts = pts;
-				} else {
-					//printf("%d,%d\n", j, k);
+				if (audio_sector < 0) {
+					printf("%d,%d: couldn't get audio sector\n", j, k);
+					continue;
 				}
+				u64 scr, pts0, pts;
+				sectorbuf b0, b1, b2;
+				if (DVDReadBlocks(vob, pb->first_sector, 1, b0) < 1 ||
+				    get_scr(b0, &scr) < 0) {
+					printf("%d,%d: couldn't get scr\n", j, k);
+					continue;
+				}
+				if (find_audio_stream(vob, pb->first_sector, b1) < 0 ||
+				    get_pts(b1, &pts0) < 0) {
+					printf("%d,%d: couldn't get pts0\n", j, k);
+					continue;
+				}
+				int e;
+				if ((e = DVDReadBlocks(vob, audio_sector, 1, b2)) < 1 ||
+				    get_pts(b2, &pts) < 0) {
+					printf("%d,%d: couldn't get pts: %d\n", j, k, e);
+					continue;
+				}
+				struct time t = time_from_scr(scr);
+				struct time len = time_from_scr(scr - last_scr);
+				printf("%d,%d: %llu ", j, k, scr);
+				printf("%f ", (scr-last_scr) * 96 / 27000.0);
+				printf("%f ", (pts-last_pts) * 96 / 90.0);
+				printf("%llu ", pts - pts0);
+				printf("%u:%02u:%06.3f ", t.hour, t.min, t.sec + t.nano / 1e9);
+				printf("%u:%02u:%06.3f\n", len.hour, len.min, len.sec + len.nano / 1e9);
+				last_scr = scr;
+				last_pts = pts;
 			}
 		}
 		DVDCloseFile(vob);
