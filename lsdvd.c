@@ -41,14 +41,14 @@ static const int dts_target_bitrate[] = {
 int print_audio(audio_attr_t *a, int n)
 {
 	if (a->audio_format == 4) {
-		return printf("%d: %s %s %d %s %#02x\n", n,
+		return printf("audio %d: %s %s %d %s %#02x\n", n,
 			audio_formats[a->audio_format],
 			channels[a->channels],
 			bitdepths[a->quantization],
 			sample_rates[a->sample_frequency],
 			stream_ids[a->audio_format]+n);
 	} else {
-		return printf("%d: %s %s %s %#02x\n", n,
+		return printf("audio %d: %s %s %s %#02x\n", n,
 			audio_formats[a->audio_format],
 			channels[a->channels],
 			sample_rates[a->sample_frequency],
@@ -269,24 +269,31 @@ int main(int argc, char *argv[])
 	if (dvd == NULL) { die("Unable to open dvd"); }
 	ifo_handle_t *ifo0 = ifoOpen(dvd, 0);
 	if (ifo0 == NULL) { die("Unable to open VIDEO_TS.IFO"); }
-	int titles = ifo0->tt_srpt->nr_of_srpts;
-	//int titles = ifo0->vmgi_mat->vmg_nr_of_title_sets;
+	//int titles = ifo0->tt_srpt->nr_of_srpts;
+	int titlesets = ifo0->vmgi_mat->vmg_nr_of_title_sets;
 
-	for (int i = 0; i < titles; i++) {
-		int title = ifo0->tt_srpt->title[i].title_set_nr;
-		int chapters = ifo0->tt_srpt->title[i].nr_of_ptts;
-		printf("title %d\n", title);
-		printf("chapters: %d\n", chapters);
-		printf("vts_ttn %d\n", ifo0->tt_srpt->title[i].vts_ttn);
-		ifo_handle_t *ifo = ifoOpen(dvd, title);
+	for (int i = 0; i < titlesets; i++) {
+		//int title = ifo0->tt_srpt->title[i].title_set_nr;
+		//int chapters = ifo0->tt_srpt->title[i].nr_of_ptts;
+		//int vts_ttn = ifo0->tt_srpt->title[i].vts_ttn;
+		//printf("title %d\n", title);
+		//printf("chapters: %d\n", chapters);
+		//printf("vts_ttn %d\n", vts_ttn);
+		int titleset = i+1;
+		printf("titleset %d\n", titleset);
+		ifo_handle_t *ifo = ifoOpen(dvd, titleset);
 		if (ifo == NULL) {
 			continue;
 		}
-		dvd_file_t *vob = DVDOpenFile(dvd, title, DVD_READ_TITLE_VOBS);
+		dvd_file_t *vob = DVDOpenFile(dvd, titleset, DVD_READ_TITLE_VOBS);
 		if (vob == NULL) {
 			ifoClose(ifo);
 			continue;
 		}
+
+		/*ptt_info_t ptt_info = ifo->vts_ptt_srpt->title[vts_ttn-1].ptt[0];
+		printf("pgcn %d, pgn %d\n", ptt_info.pgcn, ptt_info.pgn);
+		goto next;*/
 
 		vtsi_mat_t *v = ifo->vtsi_mat;
 		for (int j = 0; j < v->nr_of_vts_audio_streams; j++) {
@@ -384,6 +391,7 @@ int main(int argc, char *argv[])
 				last_scr = scr;
 			}
 		}
+	next:
 		DVDCloseFile(vob);
 		ifoClose(ifo);
 	}
