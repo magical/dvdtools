@@ -227,13 +227,15 @@ struct dts_info {
 	int target_bitrate;
 	int sample_rate;
 	int channels;
+	int lfe;
 	int source_bitdepth;
 	int frame_size;
+	int ext_audio_id;
 };
 
 struct dts_info read_dts_header(sectorbuf b)
 {
-	struct dts_info info = {0, 0, 0, 0, 0};
+	struct dts_info info = {0};
 
 	int stream = pack_stream_id(b, true);
 	if (!(0x88 <= stream && stream < 0x90)) {
@@ -250,6 +252,8 @@ struct dts_info read_dts_header(sectorbuf b)
 	info.channels = (p[7] & 0xf) << 2 | p[8] >> 6;
 	info.sample_rate = (p[8] & 0x3c) >> 2;
 	info.target_bitrate = (p[8] & 3) << 3 | p[9] >> 5;
+	info.ext_audio_id = p[10] >> 5;
+	info.lfe = (p[10] & 6) >> 2;
 	info.source_bitdepth = (p[11] & 1) << 2 | p[12] >> 6;
 
 error:
@@ -354,13 +358,14 @@ int main(int argc, char *argv[])
 					case 0x88: { // DTS
 						//printf("%d,%d,%d: dts %\n");
 						struct dts_info info = read_dts_header(b2);
-						printf("%d,%d,%d: dts %dch %dbit %s %.1fkbps (actual: %.1fkbps)\n",
+						printf("%d,%d,%d: dts %d%sch %dbit %s %.1fkbps (actual: %.1fkbps)\n",
 							j, k, a,
 							dts_channels[info.channels],
+							info.lfe ? ".1" : "",
 							dts_source_bitdepth[info.source_bitdepth],
-							dts_sample_rates[info.sample_rate],
+							info.ext_audio_id == 2 ? "96kHz" : dts_sample_rates[info.sample_rate],
 							dts_target_bitrate[info.target_bitrate] / 1000.0,
-							info.frame_size * 750 / 1000.0
+							(info.frame_size+1) * 750 / 1000.0
 						);
 						break;
 					}
