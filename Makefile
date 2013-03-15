@@ -1,5 +1,10 @@
 
-all: lsdvd
+CFLAGS=-std=c99 -pedantic -Wall -Wextra -Wconversion -Wshadow -Wno-missing-field-initializers
 
+all: lsdvd
+test: bitreader_test
+	./bitreader_test
 lsdvd: lsdvd.c Makefile
-	$(CC) -o lsdvd lsdvd.c -ldvdread -std=c99 -pedantic -Wall -Wextra -Wconversion -Wshadow -Wno-missing-field-initializers
+	$(CC) $(CFLAGS) -o lsdvd lsdvd.c -ldvdread
+bitreader_test: bitreader_test.c bitreader.c bitreader.h Makefile
+	$(CC) $(CFLAGS) -o bitreader_test bitreader_test.c bitreader.c
