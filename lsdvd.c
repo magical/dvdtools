@@ -18,10 +18,25 @@ void die(char *s) {
 
 static const char* audio_formats[] =
 	{"ac3", "0x1", "mpeg1", "mpeg2ext", "lpcm", "0x5", "dts", "0x7"};
-static const int bitrates[] = {16, 20, 24, -1};
-static const char* sample_rates[] = {"48Hz", "96Hz"};
+static const int bitdepths[] = {16, 20, 24, -1};
+static const char* sample_rates[] = {"48kHz", "96kHz"};
 static const char* channels[] = {"mono", "2ch", "3ch", "4ch", "5ch", "5.1ch", "7ch", "8ch"};
 static const int stream_ids[] = {0x80, 0, 0xc0, 0xc0, 0xa0, 0, 0x88, 0};
+
+static const int dts_channels[] = {1, 2, 2, 2, 2, 3, 3, 4, 4, 5, 6, 6, 6, 7, 8, 8};
+static const int dts_source_bitdepth[] = { 16, 16, 20, 20, 0, 24, 24 };
+static const char* dts_sample_rates[] = {
+	"?", "8kHz", "16kHz", "32kHz", "?", "?", "11.025kHz", "22.050kHz",
+	"44.1kHz", "?", "?", "12kHz", "24kHz", "48kHz", "96kHz", "192kHz"
+};
+static const int dts_target_bitrate[] = {
+	32000, 56000, 64000, 96000, 112000, 128000, 192000, 224000,
+	256000, 320000, 384000, 448000, 512000, 576000, 640000, 768000,
+	896000, 1024000, 1152000, 1280000, 1344000, 1408000, 1411200, 1472000,
+	1536000, 1920000, 2048000, 3072000, 3840000,
+	1/*open*/, 2/*variable*/, 3/*lossless*/
+};
+
 
 int print_audio(audio_attr_t *a, int n)
 {
@@ -29,7 +44,7 @@ int print_audio(audio_attr_t *a, int n)
 		return printf("%d: %s %s %d %s %#02x\n", n,
 			audio_formats[a->audio_format],
 			channels[a->channels],
-			bitrates[a->quantization],
+			bitdepths[a->quantization],
 			sample_rates[a->sample_frequency],
 			stream_ids[a->audio_format]+n);
 	} else {
@@ -182,6 +197,64 @@ int get_pts(sectorbuf b, u64 *ptsp)
 	return 0;
 }
 
+struct lpcm_info {
+	int bitdepth;
+	int sample_rate;
+	int channels;
+};
+
+struct lpcm_info read_lpcm_header(sectorbuf b)
+{
+	struct lpcm_info info = {0, 0, 0};
+
+	int stream = pack_stream_id(b, true);
+	if (!(0xa0 <= stream && stream < 0xa8)) {
+		goto error;
+	}
+	u8 *p = b + 0xe + (b[0xd] & 7); // points to PES
+	p = p + 9 + p[8]; // points to PES payload
+	p++; // points to audio substream header
+
+	info.bitdepth = p[4] >> 6;
+	info.sample_rate = (p[4] >> 4) & 3;
+	info.channels = p[4] & 3;
+
+error:
+	return info;
+}
+
+struct dts_info {
+	int target_bitrate;
+	int sample_rate;
+	int channels;
+	int source_bitdepth;
+	int frame_size;
+};
+
+struct dts_info read_dts_header(sectorbuf b)
+{
+	struct dts_info info = {0, 0, 0, 0, 0};
+
+	int stream = pack_stream_id(b, true);
+	if (!(0x88 <= stream && stream < 0x90)) {
+		goto error;
+	}
+
+	u8 *p = b + 0xe + (b[0xd] & 7); // points to PES
+	p = p + 9 + p[8]; // points to PES payload
+	p += 4; // points to DTS header
+	// DTS packets do not cross sectors, so the header is always at the top
+
+	// note: 750 frames per second
+	info.frame_size = (p[5] & 3) << 12 | p[6] << 4 | p[7] >> 4;
+	info.channels = (p[7] & 0xf) << 2 | p[8] >> 6;
+	info.sample_rate = (p[8] & 0x3c) >> 2;
+	info.target_bitrate = (p[8] & 3) << 3 | p[9] >> 5;
+	info.source_bitdepth = (p[11] & 1) << 2 | p[12] >> 6;
+
+error:
+	return info;
+}
 
 int main(int argc, char *argv[])
 {
@@ -266,6 +339,43 @@ int main(int argc, char *argv[])
 					printf("\n");
 					last_pts[a] = pts;
 				}
+
+				for (int a = 0; a < v->nr_of_vts_audio_streams; a++) {
+					int audio_sector = get_audio_sector(vob, (int)pb->first_sector, a);
+					if (audio_sector < 0) { continue; }
+					if (DVDReadBlocks(vob, audio_sector, 1, b2) < 1) {
+						printf("%d,%d,%d: couldn't read block %d\n", j, k, a, audio_sector);
+						continue;
+					}
+					int stream = pack_stream_id(b2, true);
+					switch (stream & 0xf8) {
+					case 0x80: // AC3
+						break;
+					case 0x88: { // DTS
+						//printf("%d,%d,%d: dts %\n");
+						struct dts_info info = read_dts_header(b2);
+						printf("%d,%d,%d: dts %dch %dbit %s %.1fkbps (actual: %.1fkbps)\n",
+							j, k, a,
+							dts_channels[info.channels],
+							dts_source_bitdepth[info.source_bitdepth],
+							dts_sample_rates[info.sample_rate],
+							dts_target_bitrate[info.target_bitrate] / 1000.0,
+							info.frame_size * 750 / 1000.0
+						);
+						break;
+					}
+					case 0xa0: {// LPCM
+						struct lpcm_info info = read_lpcm_header(b2);
+						printf("%d,%d,%d: lpcm %s %dbit %s\n",
+							j, k, a,
+							channels[info.channels],
+							bitdepths[info.bitdepth],
+							sample_rates[info.sample_rate]);
+						break;
+					}
+					}
+				}
+
 				last_scr = scr;
 			}
 		}
