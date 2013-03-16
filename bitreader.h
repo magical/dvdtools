@@ -2,10 +2,7 @@
 #define BITREADER_H
 
 #include <stddef.h> // size_t
-
-typedef unsigned char u8;
-typedef unsigned int uint;
-typedef unsigned long long u64;
+#include "uint.h"
 
 struct bitreader {
 	const u8 *buf;

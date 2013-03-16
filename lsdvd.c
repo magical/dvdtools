@@ -3,10 +3,8 @@
 #include <stdbool.h>
 #include <dvdread/dvd_reader.h>
 #include <dvdread/ifo_read.h>
-
-typedef unsigned int uint;
-typedef unsigned char u8;
-typedef unsigned long long u64;
+#include "uint.h"
+#include "bitreader.h"
 
 typedef u8 sectorbuf[DVD_VIDEO_LB_LEN];
 
@@ -160,19 +158,26 @@ int find_audio_stream(dvd_file_t *vob, int sector, sectorbuf b)
 
 int get_scr(sectorbuf b, u64 *scrp)
 {
+	struct bitreader br;
+	u64 scr;
+	uint scr_ext;
+
 	if (pack_stream_id(b, false) == -1) {
 		return -1;
 	}
-	u64 scr = ((u64)(b[4] & 0x38) >> 3 << 30) |
-	          ((u64)(b[4] & 3) << 28) |
-	          ((u64)b[5] << 20) |
-	          ((u64)b[6] >> 3 << 15) |
-	          ((u64)(b[6] & 3) << 13) |
-	          ((u64)b[7] << 5) |
-	          ((u64)b[8] >> 3);
-	uint scr_ext = (((uint)b[8] & 3) << 7) |
-	               ((uint)b[9] >> 1);
-	scr = scr * 300 + scr_ext;
+	bitreader_init(&br, b+4, sizeof(sectorbuf)-4);
+	skip_bits(&br, 2);
+	scr = (u64)read_bits(&br, 3) << 30;
+	skip_bits(&br, 1);
+	scr |= (u64)read_bits(&br, 15) << 15;
+	skip_bits(&br, 1);
+	scr |= (u64)read_bits(&br, 15);
+	skip_bits(&br, 1);
+	scr_ext = read_bits(&br, 9);
+	scr = scr*300 + scr_ext;
+	if (br.err != 0) {
+		return -1;
+	}
 	*scrp = scr;
 	return 0;
 }
@@ -180,6 +185,8 @@ int get_scr(sectorbuf b, u64 *scrp)
 /* Returns -1 if the buf is not a valid packet or if no PTS is present. */
 int get_pts(sectorbuf b, u64 *ptsp)
 {
+	struct bitreader br;
+	u64 pts;
 	if (pack_stream_id(b, false) != 0xbd) {
 		printf("get_pts: not a valid packet: %#x\n", pack_stream_id(b, false));
 		return -1;
@@ -188,11 +195,16 @@ int get_pts(sectorbuf b, u64 *ptsp)
 		// no pts present
 		return -1;
 	}
-	u64 pts = ((u64)(b[23] & 0x0e) >> 1 << 30) |
-	          ((u64)b[24] << 22) |
-	          ((u64)b[25] >> 1 << 15) |
-	          ((u64)b[26] << 7) |
-	          ((u64)b[27] >> 1);
+	bitreader_init(&br, b+23, sizeof(sectorbuf)-23);
+	skip_bits(&br, 4);
+	pts = (u64)read_bits(&br, 3) << 30;
+	skip_bits(&br, 1);
+	pts |= (u64)read_bits(&br, 15) << 15;
+	skip_bits(&br, 1);
+	pts |= (u64)read_bits(&br, 15);
+	if (br.err != 0) {
+		return -1;
+	}
 	*ptsp = pts;
 	return 0;
 }
