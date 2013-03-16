@@ -35,6 +35,13 @@ static const int dts_target_bitrate[] = {
 	1/*open*/, 2/*variable*/, 3/*lossless*/
 };
 
+static const char* ac3_sample_rates[] = {"48kHz", "44.1kHz", "32kHz", "???Hz"};
+static const int ac3_bitrates[] = {
+	32, 32, 40, 40, 48, 48, 56, 56, 64, 64, 70, 70, 96, 96, 112, 112,
+	128, 128, 160, 160, 192, 192, 224, 224, 256, 256, 320, 320, 384, 384, 448, 448,
+	512, 512, 576, 576, 640, 640
+};
+static const int ac3_channels[] = {2, 1, 2, 3, 3, 4, 4, 5};
 
 int print_audio(audio_attr_t *a, int n)
 {
@@ -217,7 +224,7 @@ struct lpcm_info {
 
 struct lpcm_info read_lpcm_header(sectorbuf b)
 {
-	struct lpcm_info info = {0, 0, 0};
+	struct lpcm_info info = {0};
 
 	int stream = pack_stream_id(b, true);
 	if (!(0xa0 <= stream && stream < 0xa8)) {
@@ -232,6 +239,62 @@ struct lpcm_info read_lpcm_header(sectorbuf b)
 	info.channels = p[4] & 3;
 
 error:
+	return info;
+}
+
+struct ac3_info {
+	uint sample_rate;
+	uint frame_size;
+	uint channels;
+	uint surround;
+	bool lfe;
+};
+
+struct ac3_info read_ac3_header(sectorbuf b, int *err)
+{
+	struct ac3_info info = {0};
+	// AC3 packets do not line up with frames like DTS does, so we'll just have to hope our packet doesn't end prematurely
+
+	int stream = pack_stream_id(b, true);
+	if (!(0x80 <= stream && stream <= 0x88)) {
+		goto error;
+	}
+
+	u8 *p = b + 0xe + (b[0xd] & 7); // points to PES
+	u8 *end = p + 6 + (p[4]<<8 | p[5]);
+	p = p + 9 + p[8]; // points to PES payload
+	if (p[2] == 0 && p[3] == 0) {
+		goto error;
+	}
+	p = p + 3 + (p[2]<<8 | p[3]); // points to "first" AC3 packet
+
+	struct bitreader br;
+	uint acmod;
+	bitreader_init(&br, p, (size_t)(end - p));
+
+	skip_bits(&br, 16); // syncword
+	skip_bits(&br, 16); // crc
+	info.sample_rate = read_bits(&br, 2); // sample rate
+	info.frame_size = read_bits(&br, 6); // frame size
+	skip_bits(&br, 5); // bsid
+	skip_bits(&br, 3); // bsmod
+	acmod = read_bits(&br, 3); // acmod
+	info.channels = acmod;
+	if ((acmod & 1) && acmod != 1) { skip_bits(&br, 2); } // cmixlev
+	if (acmod & 4) { skip_bits(&br, 2); } // surmixlev
+	if (acmod == 2) { skip_bits(&br, 2); } // dsurmod
+	info.lfe = read_bits(&br, 2); // lfeon
+	// etc
+
+	if (br.err != 0) {
+		goto error;
+	}
+
+	return info;
+error:
+	if (err != NULL) {
+		*err = -1;
+	}
 	return info;
 }
 
@@ -372,8 +435,22 @@ int main(int argc, char *argv[])
 					}
 					int stream = pack_stream_id(b2, true);
 					switch (stream & 0xf8) {
-					case 0x80: // AC3
+					case 0x80: { // AC3
+						int err;
+						struct ac3_info info = read_ac3_header(b2, &err);
+						printf("%d,%d,%d: ", j, k, a);
+						if (err) {
+							printf("error reading ac3 header\n");
+							break;
+						}
+						printf("ac3 %d%sch %s %dkb/s\n",
+							ac3_channels[info.channels],
+							info.lfe ? ".1" : "",
+							ac3_sample_rates[info.sample_rate],
+							ac3_bitrates[info.frame_size]
+						);
 						break;
+					}
 					case 0x88: { // DTS
 						//printf("%d,%d,%d: dts %\n");
 						struct dts_info info = read_dts_header(b2);
@@ -403,7 +480,7 @@ int main(int argc, char *argv[])
 				last_scr = scr;
 			}
 		}
-	next:
+	//next:
 		DVDCloseFile(vob);
 		ifoClose(ifo);
 	}
