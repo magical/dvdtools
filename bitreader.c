@@ -38,7 +38,7 @@ uint read_bits(struct bitreader *b, uint count)
 		return (uint)b->bits;
 	}
 
-	bits = (b->bits >> (b->count - count)) & (((uint)1 << count) - 1);
+	bits = ((uint)b->bits >> (b->count - count)) & ((1U << count) - 1);
 	b->count -= count;
 	return bits;
 }
