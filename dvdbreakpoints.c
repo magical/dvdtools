@@ -416,7 +416,7 @@ int main(int argc, char *argv[])
 	uint stream = stream_ids[a.audio_format] + audio;
 	uint sample_rate = audio_sample_rates[a.sample_frequency];
 	uint sample_size = audio_sample_sizes[a.quantization];
-	uint chan = a.channels + 1;
+	uint chan = a.channels + 1U;
 
 	if (sample_size == 0) {
 		die("Unknown sample size");
@@ -424,11 +424,11 @@ int main(int argc, char *argv[])
 
 	u64 first_pts = 0, last_pts = 0;
 	for (int i = 0; i < vtt.nr_of_ptts; i++) {
-		uint pgcn = vtt.ptt[i].pgcn - 1;
-		uint pgn = vtt.ptt[i].pgn - 1;
+		uint pgcn = vtt.ptt[i].pgcn - 1U;
+		uint pgn = vtt.ptt[i].pgn - 1U;
 		pgc_t *pgc = ifo->vts_pgcit->pgci_srp[pgcn].pgc;
 		uint cell = pgc->program_map[pgn];
-		cell_playback_t *pb = &pgc->cell_playback[cell-1];
+		cell_playback_t *pb = &pgc->cell_playback[cell-1U];
 		sectorbuf b;
 		if (1) {
 			int audio_sector = get_audio_sector(vob, (int)pb->first_sector, (int)audio);
@@ -474,9 +474,9 @@ int main(int argc, char *argv[])
 	}
 
 	if (track_mode == TRACK_LENGTH) {
-		uint i = vtt.nr_of_ptts - 1;
-		uint pgcn = vtt.ptt[i].pgcn - 1;
-		uint pgn = vtt.ptt[i].pgn - 1;
+		uint i = vtt.nr_of_ptts - 1U;
+		uint pgcn = vtt.ptt[i].pgcn - 1U;
+		uint pgn = vtt.ptt[i].pgn - 1U;
 		pgc_t *pgc = ifo->vts_pgcit->pgci_srp[pgcn].pgc;
 		uint cell = pgc->program_map[pgn];
 		cell_playback_t *pb = &pgc->cell_playback[cell-1];
