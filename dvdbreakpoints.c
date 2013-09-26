@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <inttypes.h>
 #include <string.h>
+#include <getopt.h>
 #include <dvdread/dvd_reader.h>
 #include <dvdread/ifo_read.h>
 #include "uint.h"
@@ -358,20 +359,56 @@ enum {
 	TRACK_LENGTH
 };
 
+void usage(void) {
+	printf("usage: dvdsplitpoints [-t title] [-a audio] [-d mode] [-l] [/dev/dvd]\n");
+}
+
 int main(int argc, char *argv[])
 {
 	char *dvd_filename = "/dev/dvd";
-	uint title = 2;
+	uint title = 1;
 	uint audio = 0;
 	int display_mode = DISPLAY_TIME;
 	int track_mode = TRACK_LENGTH;
+	int opt;
+	while ((opt = getopt(argc, argv, "t:a:d:l")) != -1)
+	switch (opt) {
+	case 't':
+		title = (uint)atoi(optarg);
+		break;
+	case 'a':
+		audio = (uint)atoi(optarg);
+		break;
+	case 'd':
+		if (streq(optarg, "time")) {
+			display_mode = DISPLAY_TIME;
+		} else if (streq(optarg, "frames")) {
+			display_mode = DISPLAY_FRAMES;
+		} else if (streq(optarg, "samples")) {
+			display_mode = DISPLAY_SAMPLES;
+		} else if (streq(optarg, "bytes")) {
+			display_mode = DISPLAY_BYTES;
+		} else {
+			printf("error: unknown display mode");
+			usage();
+			return 1;
+		}
+		break;
+	case 'l':
+		track_mode = TRACK_OFFSET;
+		break;
+	default:
+		usage();
+		return 1;
+	}
 	// TODO: args
-	if (argc == 1) {
-	} else if (argc == 2) {
-		dvd_filename = argv[1];
-	} else {
-		printf("usage: dvdsplitpoints [-t title] [-a audio] [/dev/dvd]\n");
-		return 0;
+	if (optind < argc) {
+		dvd_filename = argv[optind];
+		optind++;
+	}
+	if (optind < argc) {
+		usage();
+		return 1;
 	}
 	dvd_reader_t *dvd = DVDOpen(dvd_filename);
 	if (dvd == NULL) { die("Couldn't open %s", dvd_filename); }
@@ -447,6 +484,7 @@ int main(int argc, char *argv[])
 		if (get_pts(b, &pts) < 0) {
 			die("Couldn't read PTS");
 		}
+		//printf("DEBUG: %"PRIu64"\n", pts);
 		if (i == 0) {
 			first_pts = pts;
 			last_pts = pts;
