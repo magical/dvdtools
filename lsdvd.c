@@ -322,7 +322,8 @@ struct dts_info read_dts_header(sectorbuf b)
 	p += 4; // points to DTS header
 	// DTS packets do not cross sectors, so the header is always at the top
 
-	// note: 750 frames per second
+	// note: 93.75 frames per second
+	// to get bits per second, multiply the frame size by 93.75 * 8 = 750.
 	info.frame_size = (p[5] & 3) << 12 | p[6] << 4 | p[7] >> 4;
 	info.channels = (p[7] & 0xf) << 2 | p[8] >> 6;
 	info.sample_rate = (p[8] & 0x3c) >> 2;
@@ -461,7 +462,7 @@ int main(int argc, char *argv[])
 							dts_source_bitdepth[info.source_bitdepth],
 							info.ext_audio_id == 2 ? "96kHz" : dts_sample_rates[info.sample_rate],
 							dts_target_bitrate[info.target_bitrate] / 1000.0,
-							(info.frame_size+1) * 750 / 1000.0
+							(info.frame_size+1) * 0.75
 						);
 						break;
 					}
