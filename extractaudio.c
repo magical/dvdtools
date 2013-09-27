@@ -5,10 +5,13 @@
 #include <inttypes.h>
 #include <string.h>
 #include <getopt.h>
+#include <unistd.h>
 #include <dvdread/dvd_reader.h>
 #include <dvdread/ifo_read.h>
 #include "uint.h"
 #include "bitreader.h"
+
+FILE *fdopen(int, const char*);
 
 typedef u8 sectorbuf[DVD_VIDEO_LB_LEN];
 
@@ -138,6 +141,8 @@ struct lpcm_info {
 struct lpcm_info read_lpcm_header(sectorbuf b)
 {
 	struct lpcm_info info = {0};
+	static const int lpcm_bitdepths[] = {16, 20, 24, 0};
+	static const int lpcm_sample_rates[] = {48000, 96000};
 
 	int stream = pack_stream_id(b, true);
 	if (!(0xa0 <= stream && stream < 0xa8)) {
@@ -146,9 +151,9 @@ struct lpcm_info read_lpcm_header(sectorbuf b)
 	// get pointer to audio substream header
 	u8 *p = skip_pes_header(b) + 1;
 
-	info.bitdepth = p[4] >> 6;
-	info.sample_rate = (p[4] >> 4) & 3;
-	info.channels = p[4] & 3;
+	info.bitdepth = lpcm_bitdepths[p[4] >> 6];
+	info.sample_rate = lpcm_sample_rates[(p[4] >> 4) & 3];
+	info.channels = (p[4] & 3) + 1;
 
 error:
 	return info;
@@ -308,7 +313,7 @@ int get_stream_info(sectorbuf b, struct stream_info *info)
 	}
 
 	data_offset = p+4 - b;
-	if ((stream & ~3) == 0xA0) {
+	if ((stream & ~7) == 0xA0) {
 		// LPCM streams have a 3-byte header
 		data_offset += 3;
 	}
@@ -386,6 +391,87 @@ int dump_audio(FILE *f, dvd_file_t *vob, int stream, int first_sector, int last_
 	return 0;
 }
 
+char *itoa(int n) {
+	char *a = malloc(11);
+	int err = snprintf(a, 11, "%d", n);
+	if (err < 0) {
+		perror("snprintf");
+		free(a);
+		return NULL;
+	} else if (err >= 11) {
+		free(a);
+		return NULL;
+	}
+	return a;
+}
+
+FILE *open_flac(char *filename, struct lpcm_info info)
+{
+	char *bps = NULL, *samplerate = NULL, *chans = NULL;
+	int pid, err;
+	int fd[2];
+	FILE *f = NULL;
+
+	if (filename == NULL) {
+		return NULL;
+	}
+	if (info.bitdepth != 16) {
+		printf("Can't convert %d-bit audio to flac yet, sorry\n", info.bitdepth);
+		return NULL;
+	}
+
+	err = pipe(fd);
+	if (err < 0) {
+		perror("pipe");
+		return NULL;
+	}
+
+	bps = itoa(info.bitdepth);
+	samplerate = itoa(info.sample_rate);
+	chans = itoa(info.channels);
+	if (bps == NULL || samplerate == NULL || chans == NULL) {
+		goto end;
+	}
+
+	pid = fork();
+	if (pid < 0) {
+		perror("fork");
+		goto end;
+	} else if (pid == 0) {
+		close(fd[1]);
+		dup2(fd[0], 0);
+		execlp("flac",
+			"flac",
+			"--silent",
+			"-o", filename,
+			"--force-raw-format",
+			"--sign=signed",
+			"--endian=big",
+			"--bps", bps,
+			"--sample-rate", samplerate,
+			"--channels", chans,
+			"-",
+			NULL);
+		// If we get here, execlp failed
+		perror("execlp");
+		_exit(1);
+	}
+
+	close(fd[0]);
+	f = fdopen(fd[1], "w");
+
+end:
+	free(bps);
+	free(samplerate);
+	free(chans);
+	return f;
+}
+
+enum {
+	FORMAT_RAW,
+	FORMAT_FLAC,
+};
+
 void usage(void)
 {
 	printf("usage: extractaudio [-t title] [-a audio] [/dev/dvd]\n");
@@ -396,14 +482,18 @@ int main(int argc, char *argv[])
 	char *dvd_filename = "/dev/dvd";
 	uint title = 1;
 	uint audio = 0;
+	int format = FORMAT_RAW;
 	int opt;
-	while ((opt = getopt(argc, argv, "a:t:")) != -1)
+	while ((opt = getopt(argc, argv, "a:t:f")) != -1)
 	switch (opt) {
 	case 'a':
 		audio = (uint)atoi(optarg);
 		break;
 	case 't':
 		title = (uint)atoi(optarg);
+		break;
+	case 'f':
+		format = FORMAT_FLAC;
 		break;
 	default:
 		usage();
@@ -486,25 +576,49 @@ int main(int argc, char *argv[])
 	}
 
 	char *ext = ".bin";
-	switch (stream & ~3) {
-	case 0x80:
-		ext = ".ac3";
-		break;
-	case 0x88:
-		ext = ".dts";
-		break;
-	case 0xa0:
-		ext = ".pcm";
-		break;
+	struct lpcm_info lpcm_info;
+	if (format == FORMAT_RAW) {
+		switch (stream & ~7) {
+		case 0x80:
+			ext = ".ac3";
+			break;
+		case 0x88:
+			ext = ".dts";
+			break;
+		case 0xa0:
+			ext = ".pcm";
+			break;
+		}
+	} else if (format == FORMAT_FLAC) {
+		if ((stream & ~7) != 0xa0) {
+			printf("error: -f option can only be used with lpcm audio streams\n");
+			return 1;
+		}
+		sectorbuf b;
+		if (DVDReadBlocks(vob, audio_sector[0], 1, b) < 1) {
+			printf("error: couldn't read audio sector\n");
+			return 1;
+		}
+		lpcm_info = read_lpcm_header(b);
+		//printf("%d: %d %d %d\n", audio_sector[0], lpcm_info.bitdepth, lpcm_info.sample_rate, lpcm_info.channels);
+		ext = ".flac";
 	}
 
 	char filename[5+10+4+1];
 	FILE *f;
 	for (int i = 0; i < chapters; i++) {
 		sprintf(filename, "track%02d%s", i+1, ext);
-		f = fopen(filename, "wb");
-		if (f == NULL) {
-			perror("fopen");
+		if (format == FORMAT_RAW) {
+			f = fopen(filename, "wb");
+			if (f == NULL) {
+				perror("fopen");
+				return 1;
+			}
+		} else if (format == FORMAT_FLAC) {
+			f = open_flac(filename, lpcm_info);
+			if (f == NULL) {
+				return 1;
+			}
 		}
 		dump_audio(f, vob, stream, audio_sector[i], audio_sector[i+1]);
 		fclose(f);
