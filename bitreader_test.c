@@ -17,5 +17,15 @@ int main(int argc, char *argv[])
 	assert(read_bits(&b, 1) == 0);
 	assert(b.err == -1);
 
+	const u8 deadbeef[] = {0x0d, 0xea, 0xdb, 0xee, 0xf0};
+	bitreader_init(&b, deadbeef, 5);
+	skip_bits(&b, 4);
+	assert(read_bits(&b, 16) == 0xdead);
+	assert(read_bits(&b, 16) == 0xbeef);
+
+	bitreader_init(&b, deadbeef, 5);
+	skip_bits(&b, 4);
+	assert(read_bits(&b, 32) == 0xdeadbeef);
+
 	return 0;
 }

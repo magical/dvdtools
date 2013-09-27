@@ -1,4 +1,6 @@
-/* Big-endian bit reader. Modeled after http://golang.org/src/pkg/compress/bzip2/bit_reader.go */
+/* Big-endian bit reader.
+
+Modeled after http://golang.org/src/pkg/compress/bzip2/bit_reader.go */
 
 #include "bitreader.h"
 
@@ -33,12 +35,13 @@ uint read_bits(struct bitreader *b, uint count)
 		b->count += 8;
 	}
 
-	// shifting by more than the size of a word is undefined
-	if (count >= UINT_BITS) {
-		return (uint)b->bits;
+	uint shift = b->count - count;
+	uint mask = ~0U;
+	if (count < UINT_BITS) {
+		mask = (1U << count) - 1;
 	}
 
-	bits = ((uint)b->bits >> (b->count - count)) & ((1U << count) - 1);
+	bits = (uint)(b->bits >> shift) & mask;
 	b->count -= count;
 	return bits;
 }
