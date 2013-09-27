@@ -290,6 +290,9 @@ struct ac3_info read_ac3_header(sectorbuf b, int *err)
 		goto error;
 	}
 
+	if (err != NULL) {
+		*err = 0;
+	}
 	return info;
 error:
 	if (err != NULL) {
