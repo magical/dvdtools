@@ -29,7 +29,7 @@ static const char* audio_formats[] =
 static const uint audio_sample_sizes[] = {16, 20, 24, 0};
 static const uint audio_sample_rates[] = {48, 96};
 static const char* sample_rates[] = {"48kHz", "96kHz"};
-static const char* channels[] = {"mono", "2ch", "3ch", "4ch", "5ch", "5.1ch", "7ch", "8ch"};
+static const char* dvd_channels[] = {"mono", "2ch", "3ch", "4ch", "5ch", "5.1ch", "7ch", "8ch"};
 static const uint stream_ids[] = {0x80, 0, 0xc0, 0xc0, 0xa0, 0, 0x88, 0};
 
 static const int dts_channels[] = {1, 2, 2, 2, 2, 3, 3, 4, 4, 5, 6, 6, 6, 7, 8, 8};
@@ -59,14 +59,14 @@ int print_audio(audio_attr_t *a, int n)
 	if (a->audio_format == 4) {
 		return printf("audio %d: %s %s %d %s %#02x\n", n,
 			audio_formats[a->audio_format],
-			channels[a->channels],
+			dvd_channels[a->channels],
 			audio_sample_sizes[a->quantization],
 			sample_rates[a->sample_frequency],
 			stream_ids[a->audio_format]+(uint)n);
 	} else {
 		return printf("audio %d: %s %s %s %#02x\n", n,
 			audio_formats[a->audio_format],
-			channels[a->channels],
+			dvd_channels[a->channels],
 			sample_rates[a->sample_frequency],
 			stream_ids[a->audio_format]+(uint)n);
 	}
@@ -388,6 +388,7 @@ int dump_audio(FILE *f, dvd_file_t *vob, int stream, int first_sector, int last_
 			return -1;
 		}
 	}
+	fflush(f);
 	return 0;
 }
 
@@ -413,10 +414,6 @@ FILE *open_flac(char *filename, struct lpcm_info info)
 	FILE *f = NULL;
 
 	if (filename == NULL) {
-		return NULL;
-	}
-	if (info.bitdepth != 16) {
-		printf("Can't convert %d-bit audio to flac yet, sorry\n", info.bitdepth);
 		return NULL;
 	}
 
@@ -446,7 +443,7 @@ FILE *open_flac(char *filename, struct lpcm_info info)
 			"-o", filename,
 			"--force-raw-format",
 			"--sign=signed",
-			"--endian=big",
+			"--endian=little",
 			"--bps", bps,
 			"--sample-rate", samplerate,
 			"--channels", chans,
@@ -464,6 +461,137 @@ end:
 	free(bps);
 	free(samplerate);
 	free(chans);
+	return f;
+}
+
+static int repack(u8 *dst, u8 *src, int size, int depth, int channels)
+{
+	int i, di, ch, j;
+	uint b;
+	int block_size = 2 * depth/8 * channels;
+	di = 0;
+	//fprintf(stderr, "size=%d, block_size=%d\n", size, block_size);
+	//fprintf(stderr, "depth=%d, channels=%d\n", depth, channels);
+	for (i = 0; i < size - block_size + 1; ) {
+		//fprintf(stderr, "i=%d, di=%d\n", i, di);
+		if (depth == 16) {
+			for (ch = 0; ch < channels * 2; ch++) {
+				dst[di + ch*2 + 1] = src[i + ch*2 + 0];
+				dst[di + ch*2 + 0] = src[i + ch*2 + 1];
+			}
+		} else {
+			for (ch = 0; ch < channels * 2; ch++) {
+				dst[di + ch*3 + 2] = src[i + ch*2 + 0];
+				dst[di + ch*3 + 1] = src[i + ch*2 + 1];
+			}
+		}
+		i += channels * 2 * 2;
+		if (depth == 16) {
+			di += channels * 2 * 2;
+			continue;
+		}
+		else if (depth == 20) {
+			// Low nibbles packed two per byte
+			for (j = 0; j < channels; j++) {
+				b = src[i + j];
+				ch = j*2;
+				dst[di + (ch+0)*3 + 0] = b & 0xf0;
+				dst[di + (ch+1)*3 + 0] = (b & 0x0f) << 4;
+			}
+			i += channels;
+		}
+		else if (depth == 24) {
+			for (ch = 0; ch < channels * 2; ch++) {
+				dst[di + ch*3 + 0] = src[i + ch];
+			}
+			i += channels * 2;
+		}
+		di += channels * 2 * 3;
+	}
+	return di;
+}
+
+// The main body of the child process created by open_repack.
+// Reads DVD PCM from src, repacks, and writes to dst.
+static int repack_main(FILE *dst, FILE *src, int depth, int channels) {
+	u8 *buf, *dstbuf;
+	int bufsize, blocksize, blocks;
+	size_t n, wn;
+
+	// FIXME wrong for depth=20
+	blocksize = 2 * depth/8 * channels;
+	blocks = 500;
+	bufsize = blocksize * blocks;
+
+	buf = malloc((size_t)bufsize);
+	dstbuf = malloc((size_t)bufsize);
+	if (buf == NULL || dstbuf == NULL) {
+		perror(NULL);
+		return 1;
+	}
+
+	for (;;) {
+		n = fread(buf, (size_t)blocksize, (size_t)blocks, src);
+		if (ferror(src)) {
+			perror("fread");
+		}
+		if (n == 0) {
+			break;
+		}
+		repack(dstbuf, buf, (int)n*blocksize, depth, channels);
+		wn = fwrite(dstbuf, (size_t)blocksize, n, dst);
+		if (wn < n) {
+			if (ferror(dst)) {
+				perror("fwrite");
+			}
+			break;
+		}
+		if (ferror(src) || ferror(dst)) {
+			break;
+		}
+	}
+
+	if (fflush(dst) == EOF) {
+		perror("fflush");
+	}
+
+	free(buf);
+	free(dstbuf);
+	fclose(dst);
+	fclose(src);
+
+	return 0;
+}
+
+FILE *open_repack(FILE* sink, struct lpcm_info info)
+{
+	int pid, err;
+	int fd[2];
+	FILE *f;
+
+	if (sink == NULL) {
+		return NULL;
+	}
+
+	err = pipe(fd);
+	if (err < 0) {
+		perror("open_repack: pipe");
+		return NULL;
+	}
+
+	pid = fork();
+	if (pid < 0) {
+		perror("open_repack: fork");
+		return NULL;
+	}
+	if (pid == 0) {
+		close(fd[1]);
+		f = fdopen(fd[0], "r");
+		_exit(repack_main(sink, f, info.bitdepth, info.channels));
+	}
+	close(fd[0]);
+	fclose(sink);
+	f = fdopen(fd[1], "w");
 	return f;
 }
 
@@ -615,7 +743,9 @@ int main(int argc, char *argv[])
 				return 1;
 			}
 		} else if (format == FORMAT_FLAC) {
+			// TODO: clean up the processes that these create.
 			f = open_flac(filename, lpcm_info);
+			f = open_repack(f, lpcm_info);
 			if (f == NULL) {
 				return 1;
 			}
