@@ -23,14 +23,20 @@ struct bitwriter {
 	int n;
 };
 
-uint64_t readint(struct bitreader*, int);
-void     writeint(struct bitwriter*, uint64_t, int);
-uint64_t copyint(struct bitwriter*, struct bitreader*, int);
+int      getnbitsread(struct bitreader*);
+uint64_t readbits(struct bitreader*, int);
+void     writebits(struct bitwriter*, uint64_t, int);
+int      copyint(struct bitwriter*, struct bitreader*, int);
 void grow(struct bitwriter*, int);
+
+int
+getnbitsread(struct bitreader *br) {
+	return br->nread * 8 - br->n;
+}
 
 // Read N bits from B.
 uint64_t
-readint(struct bitreader *br, int n)
+readbits(struct bitreader *br, int n)
 {
 	uint64_t ret;
 	int c;
@@ -41,7 +47,7 @@ readint(struct bitreader *br, int n)
 			return 0;
 		}
 		br->res <<= 8;
-		br->res |= c;
+		br->res |= (uint64_t)c;
 		br->n += 8;
 		br->nread += 1;
 	}
@@ -51,8 +57,14 @@ readint(struct bitreader *br, int n)
 }
 
 void
-writeint(struct bitwriter *bw, uint64_t bits, int n)
+writebits(struct bitwriter *bw, uint64_t bits, int n)
 {
+	if (n <= 0) {
+		return;
+	}
+	if (n < 64) {
+		bits &= (1ULL<<n)-1ULL;
+	}
 	bw->res <<= n;
 	bw->res |= bits;
 	grow(bw, bw->len + bw->n/8);
@@ -60,7 +72,7 @@ writeint(struct bitwriter *bw, uint64_t bits, int n)
 		return;
 	}
 	while (bw->n >= 8 && bw->len < bw->cap) {
-		bw->buf[bw->len] = bw->res >> (bw->n - 8);
+		bw->buf[bw->len] = (uint8_t)(bw->res >> (bw->n - 8));
 		bw->n -= 8;
 		bw->len += 1;
 	}
@@ -79,7 +91,7 @@ grow(struct bitwriter *bw, int to)
 	if (to < 1024) {
 		to = 1024;
 	}
-	buf = realloc(bw->buf, to);
+	buf = realloc(bw->buf, (size_t)to);
 	if (buf == NULL) {
 		// uh-oh
 		bw->err = ENOMEM;
@@ -89,95 +101,113 @@ grow(struct bitwriter *bw, int to)
 	bw->cap = to;
 }
 
-// Copy and return n bits from br to bw.
-uint64_t
+int
 copyint(struct bitwriter *bw, struct bitreader *br, int n)
 {
-	uint64_t bits = readint(br, n);
+	uint64_t bits = readbits(br, n);
 	if (br->err) {
 		return 0;
 	}
-	writeint(bw, bits, n);
-	return bits;
+	writebits(bw, bits, n);
+	return (int)bits;
 }
 
 // Step 1: Round-trip
 
 #define SYNCWORD 0x00B7
 
-int ac3(struct bitwriter*, struct bitreader*);
-int syncframe(struct bitwriter*, struct bitreader*);
-void bsi(struct bitwriter*, struct bitreader*);
-void audblk(struct bitwriter*, struct bitreader*);
-void auxdata(void);
-
-static int nfchanstab[] = {2, 1, 2, 3, 3, 4, 4, 5};
-static int cplexpgrptab[] = {0, 3, 6, 12};
-
 struct ac3 {
 	struct bitwriter *bw;
 	struct bitreader *br;
+
+	int acmod; // channel mode
+	int lfeon; // LFE channel present
+	int fscod; // frequency code. 0=48kHz; 1=44.1kHz; 2=32kHz
+	int frmsizecod; // frame size code
+	int cplinu; // channel coupling in use flag
+
+	int bap[256]; // bit allocation
 };
+
+int ac3(struct bitwriter*, struct bitreader*);
+static int syncframe(struct ac3*, struct bitwriter*, struct bitreader*);
+static void audblk(struct ac3*, struct bitwriter*, struct bitreader*);
+
+static int nfchanstab[] = {2, 1, 2, 3, 3, 4, 4, 5};
+static int expgrptab[] = {0, 3, 6, 12};
+static int frmsizetab[3][38] = {{
+	96, 96, 120, 120, 144, 144, 168, 168, 192, 192, 240, 240, 288, 288,
+	336, 336, 384, 384, 480, 480, 576, 576, 672, 672, 768, 768, 960, 960,
+	1152, 1152, 1344, 1344, 1536, 1536, 1728, 1728, 1920, 1920,
+}, {
+	69, 70, 87, 88, 104, 105, 121, 122, 139, 140, 174, 175, 208, 209, 243,
+	244, 278, 279, 348, 349, 417, 418, 487, 488, 557, 558, 696, 697, 835,
+	836, 975, 976, 1114, 1115, 1253, 1254, 1393, 1394,
+}, {
+	64, 64, 80, 80, 96, 96, 112, 112, 128, 128, 160, 160, 192, 192, 224,
+	224, 256, 256, 320, 320, 384, 384, 448, 448, 512, 512, 640, 640, 768,
+	768, 896, 896, 1024, 1024, 1152, 1152, 1280, 1280,
+}};
+
+// Copy and return n bits from a->br to a->bw.
+int
+copy(struct ac3 *a, int n)
+{
+	uint64_t bits = readbits(a->br, n);
+	if (a->br->err) {
+		return 0;
+	}
+	writebits(a->bw, bits, n);
+	return (int)bits;
+}
 
 int
 ac3(struct bitwriter *bw, struct bitreader *br)
 {
+	struct ac3 a;
+	a.bw = bw;
+	a.br = br;
 	for (;;) {
-		syncframe(bw, br);
+		syncframe(&a, bw, br);
 	}
 }
 
-int
-syncframe(struct bitwriter *bw, struct bitreader *br)
-{
-	int blk;
-	int crcrsv, crc2;
+/* Appologies for the terrible variable names. They're straight from the spec. */
 
-	int syncword = readint(br, 16);
+static int
+syncframe(struct ac3 *a, struct bitwriter *bw, struct bitreader *br)
+{
+	int i, blk;
+	int syncword, crcrsv, crc2;
+	int addbsil;
+	int nauxbits;
+
+	syncword = (int)readbits(br, 16);
 	if (syncword != SYNCWORD) {
 		return -1;
 	}
-	writeint(bw, syncword, 16);
+	writebits(bw, (uint64_t)syncword, 16);
 	copyint(bw, br, 16); // crc1
-	copyint(bw, br, 2); // fscod
-	copyint(bw, br, 6); // frmsizecod
+	a->fscod      = copyint(bw, br, 2); // fscod
+	a->frmsizecod = copyint(bw, br, 6); // frmsizecod
 
-	// We'll come back and fix up the CRC later.
+	// We'll come back later to fix the CRC.
 
-	bsi(bw, br);
-	for (blk = 0; blk < 6; blk++) {
-		audblk(bw, br);
-	}
-	auxdata();
-
-	crcrsv = copyint(bw, br, 1);
-	crc2 = copyint(bw, br, 16);
-
-	(void)crcrsv;
-	(void)crc2;
-
-	return 0;
-}
-
-void
-bsi(struct bitwriter *bw, struct bitreader *br)
-{
-	int acmod, addbsil;
-	int i;
-
+	// Bit stream information
+	//
 	copyint(bw, br, 5); // bsid
 	copyint(bw, br, 3); // bsmod
-	acmod = copyint(bw, br, 3);
-	if ((acmod & 1) && acmod != 1) {
+	a->acmod = copyint(bw, br, 3); // acmod
+	if ((a->acmod & 1) && a->acmod != 1) {
 		copyint(bw, br, 2); // cmixlev
 	}
-	if (acmod & 4) {
+	if (a->acmod & 4) {
 		copyint(bw, br, 2); // surmixlev
 	}
-	if (acmod == 2) {
+	if (a->acmod == 2) {
 		copyint(bw, br, 2); // dsurmod
 	}
-	copyint(bw, br, 1); // lfeon
+	a->lfeon = copyint(bw, br, 1); // lfeon
 	copyint(bw, br, 5); // dialnorm
 	if (copyint(bw, br, 1)) { // compre
 		copyint(bw, br, 8); // compr
@@ -189,7 +219,7 @@ bsi(struct bitwriter *bw, struct bitreader *br)
 		copyint(bw, br, 5); // mixlevel
 		copyint(bw, br, 2); // roomtyp
 	}
-	if (acmod == 0) {
+	if (a->acmod == 0) {
 		copyint(bw, br, 5); // dialnorm2
 		if (copyint(bw, br, 1)) { // compr2e
 			copyint(bw, br, 8); // compr2
@@ -211,21 +241,49 @@ bsi(struct bitwriter *bw, struct bitreader *br)
 		copyint(bw, br, 14); // timecod2
 	}
 	if (copyint(bw, br, 1)) { // addbsie
-		addbsil = copyint(bw, br, 6);
+		addbsil = copyint(bw, br, 6); // addbsil
 		for (i = 0; i < addbsil + 1; i++) {
 			copyint(bw, br, 8); // addbsi
 		}
 	}
+
+	// Audio blocks
+	//
+	for (blk = 0; blk < 6; blk++) {
+		audblk(a, bw, br);
+	}
+
+	// Auxilliary bits
+	//
+	nauxbits = frmsizetab[a->fscod][a->frmsizecod] * 16;
+	nauxbits -= getnbitsread(br);
+	while (nauxbits >= 16) {
+		copyint(bw, br, 16);
+		nauxbits -= 16;
+	}
+	copyint(bw, br, nauxbits);
+	copyint(bw, br, 14); // auxdatal
+	copyint(bw, br, 1); // auxdatae
+
+	// Final CRC
+	//
+	crcrsv = copyint(bw, br, 1); // crcrsv
+	crc2 = copyint(bw, br, 16); // crc2
+
+	(void)crcrsv;
+	(void)crc2;
+
+	return 0;
 }
 
-void
-audblock(struct bitwriter *bw, struct bitreader *br)
+static void
+audblk(struct ac3 *a, struct bitwriter *bw, struct bitreader *br)
 {
-	int acmod, lfeon;
-	int ch, nfchans;
-	nfchans = nfchanstab[acmod];
+	int i, ch, bin, seg;
+	int nfchans;
+	int tmp;
 
-	int i, bin, seg;
+	nfchans = nfchanstab[a->acmod];
 
 	copyint(bw, br, nfchans); // blksw[ch]
 	copyint(bw, br, nfchans); // dlithflag[ch]
@@ -234,7 +292,7 @@ audblock(struct bitwriter *bw, struct bitreader *br)
 		copyint(bw, br, 8); // dynrang
 	}
 
-	if (acmod == 0) {
+	if (a->acmod == 0) {
 		if (copyint(bw, br, 1)) { // dynrang2e
 			copyint(bw, br, 8); // dynrang2
 		}
@@ -251,27 +309,27 @@ audblock(struct bitwriter *bw, struct bitreader *br)
 	phsflginu = 0;
 	ncplbnd = 0;
 	if (copyint(bw, br, 1)) { // cplstre
-		cplinu = copyint(bw, br, 1);
+		cplinu = copyint(bw, br, 1); // cplinu
 		if (cplinu) {
-			chincpl = copyint(bw, br, nfchans);
-			if (acmod == 2) {
-				phsflginu = copyint(bw, br, 1);
+			chincpl = copyint(bw, br, nfchans); // chincpl
+			if (a->acmod == 2) {
+				phsflginu = copyint(bw, br, 1); // phsflginu
 			}
-			cplbegf = copyint(bw, br, 4);
-			cplendf = copyint(bw, br, 4) + 3;
+			cplbegf = copyint(bw, br, 4); // cplbegf
+			cplendf = copyint(bw, br, 4) + 3; // cplendf
 			cplbegmant = cplbegf*12 + 37;
 			cplendmant = cplendf*12 + 37;
 			ncplsubnd = cplendf - cplbegf;
 			ncplbnd = ncplsubnd;
 			for (bnd = 1; bnd < ncplsubnd; bnd++) {
-				ncplbnd += copyint(bw, br, 1);
+				ncplbnd += copyint(bw, br, 1); // ncplbnd
 			}
 		}
 	}
 	if (cplinu) {
 		for (ch = 0; ch < nfchans; ch++) {
 			if (chincpl & (1<<ch)) {
-				cplcoe[ch] = copyint(bw, br, 1);
+				cplcoe[ch] = copyint(bw, br, 1); // cplcoe[ch]
 				if (cplcoe[ch]) {
 					copyint(bw, br, 2); // mstrcplco[ch]
 					for (bnd = 0; bnd < ncplbnd; bnd++) {
@@ -281,11 +339,11 @@ audblock(struct bitwriter *bw, struct bitreader *br)
 				}
 			}
 		}
-		if (acmod == 2 && phsflginu && (cplcoe[0] || cplcoe[1])) {
+		if (a->acmod == 2 && phsflginu && (cplcoe[0] || cplcoe[1])) {
 			copyint(bw, br, ncplbnd); // phsflg
 		}
 	}
-	if (acmod == 2) {
+	if (a->acmod == 2) {
 		if (copyint(bw, br, 1)) { // rematstr
 			if (cplbegf == 0 && cplinu) {
 				copyint(bw, br, 2); // rematflg
@@ -300,26 +358,26 @@ audblock(struct bitwriter *bw, struct bitreader *br)
 	// Exponents
 	//
 	int cplexpstr, chexpstr[5], lfeexpstr;
+	int chbwcod[5];
 	int grp, ncplgrps, nchgrps;
 	cplexpstr = 0;
 	if (cplinu) {
-		cplexpstr = copyint(bw, br, 2);
-
+		cplexpstr = copyint(bw, br, 2); // cplexpstr
 	}
 	for (ch = 0; ch < nfchans; ch++) {
-		chexpstr[ch] = copyint(bw, br, 2);
+		chexpstr[ch] = copyint(bw, br, 2); // chexpstr[ch]
 	}
-	if (lfeon) {
-		lfeexpstr = copyint(bw, br, 1);
+	if (a->lfeon) {
+		lfeexpstr = copyint(bw, br, 1); // lfeexpstr
 	}
 	for (ch = 0; ch < nfchans; ch++) {
 		if (chexpstr[ch] != 0 && !(chincpl & (1<<ch))) {
-			copyint(bw, br, 6); // chbwcod
+			chbwcod[ch] = copyint(bw, br, 6); // chbwcod[ch]
 		}
 	}
 	if (cplinu) {
 		if (cplexpstr != 0) {
-			ncplgrps = (cplendmant - cplbegmant) / cplexpgrptab[cplexpstr];
+			ncplgrps = (cplendmant - cplbegmant) / expgrptab[cplexpstr];
 			copyint(bw, br, 4); // cplabsexp
 			for (grp = 0; grp < ncplgrps; grp++) {
 				copyint(bw, br, 7); // cplexps
@@ -329,13 +387,14 @@ audblock(struct bitwriter *bw, struct bitreader *br)
 	for (ch = 0; ch < nfchans; ch++) {
 		if (chexpstr[ch] != 0) {
 			copyint(bw, br, 4); // exps[ch][0]
-			nchgrps = 0; // XXX
+			tmp = chexpstr[ch];
+			nchgrps = (chbwcod[ch]*3 + 72 + expgrptab[tmp]-3) / expgrptab[tmp];
 			for (grp = 0; grp < nchgrps; grp++) {
 				copyint(bw, br, 7); // exps[ch][grp]
 			}
 		}
 	}
-	if (lfeon) {
+	if (a->lfeon) {
 		if (lfeexpstr != 0) {
 			copyint(bw, br, 4); // lfeexps[0]
 			copyint(bw, br, 7); // lfeexps[1]
@@ -363,7 +422,7 @@ audblock(struct bitwriter *bw, struct bitreader *br)
 			copyint(bw, br, 4); // fsnroffst
 			copyint(bw, br, 3); // fgaincod
 		}
-		if (lfeon) {
+		if (a->lfeon) {
 			copyint(bw, br, 4); // lfefsnroffst
 			copyint(bw, br, 3); // lfefgaincod
 		}
@@ -376,14 +435,14 @@ audblock(struct bitwriter *bw, struct bitreader *br)
 	}
 	if (copyint(bw, br, 1)) { // deltbaie
 		if (cplinu) {
-			cpldeltbae = copyint(bw, br, 2);
+			cpldeltbae = copyint(bw, br, 2); // cpldeltdae
 		}
 		for (ch = 0; ch < nfchans; ch++) {
-			deltbae[ch] = copyint(bw, br, 2);
+			deltbae[ch] = copyint(bw, br, 2); // deltdae[ch]
 		}
 		if (cplinu) {
 			if (cpldeltbae == 1) {
-				deltnseg = copyint(bw, br, 3);
+				deltnseg = copyint(bw, br, 3); // deltnseg
 				for (seg = 0; seg < deltnseg; seg++) {
 					copyint(bw, br, 5); // deltoffst
 					copyint(bw, br, 4); // deltlen
@@ -393,7 +452,7 @@ audblock(struct bitwriter *bw, struct bitreader *br)
 		}
 		for (ch = 0; ch < nfchans; ch++) {
 			if (deltbae[ch] == 1) {
-				deltnseg = copyint(bw, br, 3);
+				deltnseg = copyint(bw, br, 3); // deltnseg
 				for (seg = 0; seg < deltnseg; seg++) {
 					copyint(bw, br, 5); // deltoffst
 					copyint(bw, br, 4); // deltlen
@@ -433,7 +492,7 @@ audblock(struct bitwriter *bw, struct bitreader *br)
 			}
 		}
 	}
-	if (lfeon) {
+	if (a->lfeon) {
 		for (bin = 0; bin < 7; bin++) {
 			copyint(bw, br, x); // lfemant[bin]
 		}
