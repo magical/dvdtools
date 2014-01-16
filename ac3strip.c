@@ -223,16 +223,9 @@ audblock(struct bitwriter *bw, struct bitreader *br)
 {
 	int acmod, lfeon;
 	int ch, nfchans;
-	int phsflginu;
-	int cplinu, chincpl, cplcoe[5];
-	int cplbegf, cplendf, cplbegmant, cplendmant;
-	int cplexpstr, chexpstr[5], lfeexpstr;
-	int bnd, ncplsubnd, ncplbnd;
-	int grp, ncplgrps, nchgrps;
-	int cpldeltbae, deltbae[5], deltnseg;
-	int skipl;
-	int i, bin, seg;
 	nfchans = nfchanstab[acmod];
+
+	int i, bin, seg;
 
 	copyint(bw, br, nfchans); // blksw[ch]
 	copyint(bw, br, nfchans); // dlithflag[ch]
@@ -249,6 +242,10 @@ audblock(struct bitwriter *bw, struct bitreader *br)
 
 	// Coupling
 	//
+	int cplinu, chincpl, cplcoe[5];
+	int cplbegf, cplendf, cplbegmant, cplendmant;
+	int bnd, ncplsubnd, ncplbnd;
+	int phsflginu;
 	cplinu = 0;
 	chincpl = 0;
 	phsflginu = 0;
@@ -302,6 +299,8 @@ audblock(struct bitwriter *bw, struct bitreader *br)
 
 	// Exponents
 	//
+	int cplexpstr, chexpstr[5], lfeexpstr;
+	int grp, ncplgrps, nchgrps;
 	cplexpstr = 0;
 	if (cplinu) {
 		cplexpstr = copyint(bw, br, 2);
@@ -330,7 +329,7 @@ audblock(struct bitwriter *bw, struct bitreader *br)
 	for (ch = 0; ch < nfchans; ch++) {
 		if (chexpstr[ch] != 0) {
 			copyint(bw, br, 4); // exps[ch][0]
-			nchgrps = 0;
+			nchgrps = 0; // XXX
 			for (grp = 0; grp < nchgrps; grp++) {
 				copyint(bw, br, 7); // exps[ch][grp]
 			}
@@ -346,6 +345,7 @@ audblock(struct bitwriter *bw, struct bitreader *br)
 
 	// Bit allocation
 	//
+	int cpldeltbae, deltbae[5], deltnseg;
 	if (copyint(bw, br, 1)) { // baie
 		copyint(bw, br, 2); // sdcycod
 		copyint(bw, br, 2); // fdcycod
@@ -405,6 +405,7 @@ audblock(struct bitwriter *bw, struct bitreader *br)
 
 	// Skip bytes
 	//
+	int skipl;
 	if (copyint(bw, br, 1)) { // skiple
 		skipl = copyint(bw, br, 9); // skipl
 		for (i = 0; i < skipl; i++) {
@@ -414,16 +415,27 @@ audblock(struct bitwriter *bw, struct bitreader *br)
 
 	// Mantissas
 	//
+	// nchmant[ch] from chbwcod[ch] or cplbegf
+	//
+	int nchmant[5];
+	int ncplmant;
 	int got_cplchan;
 	got_cplchan = 0;
 	for (ch = 0; ch < nfchans; ch++) {
 		for (bin = 0; bin < nchmant[ch]; bin++) {
-			
+			copyint(bw, br, x); // chmant[ch][bin]
+			if (cplinu && (chincpl & (1<<ch)) && !got_cplchan) {
+				ncplmant = 12 * ncplsubnd;
+				for (bin = 0; bin < ncplmant; bin++) {
+					// cplmant[bin]
+				}
+				got_cplchan = 1;
+			}
 		}
 	}
 	if (lfeon) {
 		for (bin = 0; bin < 7; bin++) {
-			
+			copyint(bw, br, x); // lfemant[bin]
 		}
 	}
 }
