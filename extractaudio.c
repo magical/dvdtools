@@ -256,7 +256,7 @@ error:
 // 00-03: 00 00 01 BA (4 bytes)
 // 04-09: system clock reference (6 bytes)
 // 0A-0C: mux rate
-// 0D: stuffing length 
+// 0D: stuffing length
 // <stuffing>
 //
 // PES HEADER
