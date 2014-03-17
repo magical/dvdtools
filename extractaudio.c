@@ -46,7 +46,7 @@ static const int dts_target_bitrate[] = {
 	1/*open*/, 2/*variable*/, 3/*lossless*/
 };
 
-//static const char* ac3_sample_rates[] = {"48kHz", "44.1kHz", "32kHz", "???Hz"};
+/*static const char* ac3_sample_rates[] = {"48kHz", "44.1kHz", "32kHz", "???Hz"};*/
 static const int ac3_bitrates[] = {
 	32, 32, 40, 40, 48, 48, 56, 56, 64, 64, 70, 70, 96, 96, 112, 112,
 	128, 128, 160, 160, 192, 192, 224, 224, 256, 256, 320, 320, 384, 384, 448, 448,
@@ -595,14 +595,54 @@ FILE *open_repack(FILE* sink, struct lpcm_info info)
 	return f;
 }
 
-enum {
-	FORMAT_RAW,
-	FORMAT_FLAC,
-};
+// Parse a decimal number and place it in *out.
+// Returns a pointer to the unparsed portion of the string.
+const char* parse_int(const char* s, int* out)
+{
+	int n = 0;
+	const char *p;
+	for (p = s; '0' <= *p && *p <= '9'; p++) {
+		n *= 10;
+		n += *p - '0';
+	}
+	if (p != s) {
+		*out = n;
+	}
+	return p;
+}
+
+int parse_range(const char* s, int* startp, int* endp)
+{
+	// Valid inputs:
+	//     N-M
+	//      -N
+	//     N-
+	//      N
+
+	const char* p = s;
+	*startp = 1;
+	*endp = -1;
+
+	if (s[0] == '-' && s[1] == '\0') {
+		return -1;
+	}
+
+	p = parse_int(p, startp);
+	if (*p == '-') {
+		p = parse_int(p+1, endp);
+	} else if (p != s) {
+		*endp = *startp;
+	}
+	if (*p != '\0' || p == s) {
+		return -1;
+	}
+
+	return 0;
+}
 
 void usage(void)
 {
-	printf("usage: extractaudio [-t title] [-a audio] [/dev/dvd]\n");
+	printf("usage: extractaudio [-d /dev/dvd] [-t title] [-a audio] [range]\n");
 }
 
 int main(int argc, char *argv[])
@@ -610,12 +650,20 @@ int main(int argc, char *argv[])
 	char *dvd_filename = "/dev/dvd";
 	uint title = 1;
 	uint audio = 0;
-	int format = FORMAT_RAW;
+	int chapterstart = 0, chapterend = -1;
+	char* chapterrange = "1-";
+	enum {
+		FORMAT_RAW,
+		FORMAT_FLAC,
+	} format = FORMAT_RAW;
 	int opt;
-	while ((opt = getopt(argc, argv, "a:t:f")) != -1)
+	while ((opt = getopt(argc, argv, "a:d:t:f")) != -1)
 	switch (opt) {
 	case 'a':
 		audio = (uint)atoi(optarg);
+		break;
+	case 'd':
+		dvd_filename = optarg;
 		break;
 	case 't':
 		title = (uint)atoi(optarg);
@@ -628,13 +676,18 @@ int main(int argc, char *argv[])
 		return 0;
 	}
 	if (optind < argc) {
-		dvd_filename = argv[optind];
+		chapterrange = argv[optind];
 		optind++;
 	}
 	if (optind < argc) {
 		usage();
 		return 0;
 	}
+
+	if (parse_range(chapterrange, &chapterstart, &chapterend) < 0) {
+		die("Couldn't parse chapter range");
+	}
+	printf("Ripping tracks %d through %d\n", chapterstart, chapterend);
 
 	dvd_reader_t *dvd = DVDOpen(dvd_filename);
 	if (dvd == NULL) { die("Couldn't open %s", dvd_filename); }
@@ -732,9 +785,17 @@ int main(int argc, char *argv[])
 		ext = ".flac";
 	}
 
+	if (chapterstart > 0) {
+		// Switch to zero-indexing
+		chapterstart--;
+	}
+	if (chapterend < 0) {
+		chapterend = chapters;
+	}
+
 	char filename[5+10+4+1];
 	FILE *f;
-	for (int i = 0; i < chapters; i++) {
+	for (int i = chapterstart; i < chapterend; i++) {
 		sprintf(filename, "track%02d%s", i+1, ext);
 		if (format == FORMAT_RAW) {
 			f = fopen(filename, "wb");
