@@ -6,6 +6,7 @@
 #include <string.h>
 #include <getopt.h>
 #include <unistd.h>
+#include <sys/wait.h>
 #include <dvdread/dvd_reader.h>
 #include <dvdread/ifo_read.h>
 #include "uint.h"
@@ -14,6 +15,21 @@
 FILE *fdopen(int, const char*);
 
 typedef u8 sectorbuf[DVD_VIDEO_LB_LEN];
+
+struct writer {
+	int (*write)(struct writer* w, const u8* buf, int size);
+	int (*close)(struct writer* w);
+
+	// Private fields used by various writers
+	struct writer* writer;
+	FILE* fp;
+	int pid;
+	u8* buf;
+	int depth;
+	int channels;
+};
+
+static int debug = 0;
 
 void die(char *fmt, ...) {
 	va_list va;
@@ -283,6 +299,7 @@ struct stream_info {
 	// words, it is the size of the packet.
 	int end_offset;
 };
+
 int get_stream_info(sectorbuf b, struct stream_info *info)
 {
 	int data_offset, first_frame_offset, size, stream;
@@ -327,7 +344,7 @@ int get_stream_info(sectorbuf b, struct stream_info *info)
 
 // Write audio packets to a file.
 // Last_sector should be the first audio packet of the next chapter.
-int dump_audio(FILE *f, dvd_file_t *vob, int stream, int first_sector, int last_sector)
+int dump_audio(struct writer* w, dvd_file_t *vob, int stream, int first_sector, int last_sector)
 {
 	sectorbuf b;
 	int sector;
@@ -383,12 +400,10 @@ int dump_audio(FILE *f, dvd_file_t *vob, int stream, int first_sector, int last_
 		if (start == end) {
 			continue;
 		}
-		if (fwrite(b + start, (size_t)(end - start), 1, f) != 1) {
-			perror("fwrite");
+		if (w->write(w, b+start, end-start) < 0) {
 			return -1;
 		}
 	}
-	fflush(f);
 	return 0;
 }
 
@@ -406,34 +421,89 @@ char *itoa(int n) {
 	return a;
 }
 
-FILE *open_flac(char *filename, struct lpcm_info info)
+static int file_write(struct writer* w, const u8* buf, int size);
+static int file_close(struct writer* w);
+static int flac_close(struct writer* w);
+static int repack_write(struct writer* w, const u8* buf, int size);
+static int repack_close(struct writer* w);
+
+static struct writer* open_file(const char* filename)
+{
+	struct writer* w = malloc(sizeof *w);
+	if (w == NULL) {
+		return NULL;
+	}
+	w->fp = fopen(filename, "wb");
+	if (w->fp == NULL) {
+		perror("fopen");
+		free(w);
+		return NULL;
+	}
+	w->write = file_write;
+	w->close = file_close;
+	return w;
+}
+
+static int file_write(struct writer* w, const u8* buf, int size)
+{
+	if (size < 0) {
+		return -1;
+	}
+	if (fwrite(buf, 1, (size_t)size, w->fp) != (size_t)size) {
+		perror("fwrite");
+		return -1;
+	}
+	return 0;
+}
+
+static int file_close(struct writer* w)
+{
+	int err = fclose(w->fp);
+	free(w);
+	return err;
+}
+
+struct writer* open_flac(char *filename, struct lpcm_info info)
 {
 	char *bps = NULL, *samplerate = NULL, *chans = NULL;
 	int pid, err;
 	int fd[2];
-	FILE *f = NULL;
+	FILE *fp = NULL;
+	struct writer* w = NULL;
 
 	if (filename == NULL) {
+		return NULL;
+	}
+
+	w = malloc(sizeof *w);
+	if (w == NULL) {
 		return NULL;
 	}
 
 	err = pipe(fd);
 	if (err < 0) {
 		perror("pipe");
-		return NULL;
+		goto cleanup;
 	}
 
+	fp = fdopen(fd[1], "w");
+	if (fp == NULL) {
+		goto cleanup;
+	}
+
+	// It might seem like it would be better to allocate these in the
+	// child, but we'd be in big trouble if they failed.
 	bps = itoa(info.bitdepth);
 	samplerate = itoa(info.sample_rate);
 	chans = itoa(info.channels);
 	if (bps == NULL || samplerate == NULL || chans == NULL) {
-		goto end;
+		goto cleanup;
 	}
 
 	pid = fork();
 	if (pid < 0) {
 		perror("fork");
-		goto end;
+		goto cleanup;
 	} else if (pid == 0) {
 		close(fd[1]);
 		dup2(fd[0], 0);
@@ -455,145 +525,148 @@ FILE *open_flac(char *filename, struct lpcm_info info)
 	}
 
 	close(fd[0]);
-	f = fdopen(fd[1], "w");
-
-end:
 	free(bps);
 	free(samplerate);
 	free(chans);
-	return f;
+
+	w->fp = fp;
+	w->pid = pid;
+	w->write = file_write;
+	w->close = flac_close;
+
+	return w;
+
+cleanup:
+	free(w);
+	free(bps);
+	free(samplerate);
+	free(chans);
+	return NULL;
 }
 
-static int repack(u8 *dst, u8 *src, int size, int depth, int channels)
+static int flac_close(struct writer* w)
 {
-	int i, di, ch, j;
+	int err = fclose(w->fp);
+	waitpid(w->pid, NULL, 0);
+	free(w);
+	return err;
+}
+
+// Copy src to dst, repacking DVD PCM to little-endian PCM. Reads no more than
+// srcsize bytes and writes no more than dstsize bytes. Stores the number of
+// bytes written and read in wn and rn.
+static void repack(u8 *dst, const u8 *src, int dstsize, int srcsize, int depth, int channels, int* wn, int* rn)
+{
+	int si, di, ch, j;
 	uint b;
-	int block_size = 2 * depth/8 * channels;
-	di = 0;
-	//fprintf(stderr, "size=%d, block_size=%d\n", size, block_size);
-	//fprintf(stderr, "depth=%d, channels=%d\n", depth, channels);
-	for (i = 0; i < size - block_size + 1; ) {
-		//fprintf(stderr, "i=%d, di=%d\n", i, di);
+	int srcblocksize = 2*depth/8 * channels;
+	int dstblocksize = 2*((depth+7)/8) * channels;
+	if (debug) {
+		fprintf(stderr, "dstsize=%d, dstblocksize=%d\n", dstsize, dstblocksize);
+		fprintf(stderr, "srcsize=%d, srcblocksize=%d\n", srcsize, srcblocksize);
+		fprintf(stderr, "depth=%d, channels=%d\n", depth, channels);
+	}
+	for (si = 0, di = 0; si+srcblocksize <= srcsize && di+dstblocksize <= dstsize; ) {
+		//fprintf(stderr, "si=%d, di=%d\n", si, di);
 		if (depth == 16) {
 			for (ch = 0; ch < channels * 2; ch++) {
-				dst[di + ch*2 + 1] = src[i + ch*2 + 0];
-				dst[di + ch*2 + 0] = src[i + ch*2 + 1];
+				dst[di + ch*2 + 1] = src[si + ch*2 + 0];
+				dst[di + ch*2 + 0] = src[si + ch*2 + 1];
 			}
 		} else {
 			for (ch = 0; ch < channels * 2; ch++) {
-				dst[di + ch*3 + 2] = src[i + ch*2 + 0];
-				dst[di + ch*3 + 1] = src[i + ch*2 + 1];
+				dst[di + ch*3 + 2] = src[si + ch*2 + 0];
+				dst[di + ch*3 + 1] = src[si + ch*2 + 1];
 			}
 		}
-		i += channels * 2 * 2;
+		si += channels * 2 * 2;
 		if (depth == 16) {
 			di += channels * 2 * 2;
-			continue;
 		}
 		else if (depth == 20) {
 			// Low nibbles packed two per byte
 			for (j = 0; j < channels; j++) {
-				b = src[i + j];
+				b = src[si + j];
 				ch = j*2;
 				dst[di + (ch+0)*3 + 0] = b & 0xf0;
 				dst[di + (ch+1)*3 + 0] = (b & 0x0f) << 4;
 			}
-			i += channels;
+			si += channels;
+			di += channels * 2 * 3;
 		}
 		else if (depth == 24) {
 			for (ch = 0; ch < channels * 2; ch++) {
-				dst[di + ch*3 + 0] = src[i + ch];
+				dst[di + ch*3 + 0] = src[si + ch];
 			}
-			i += channels * 2;
+			si += channels * 2;
+			di += channels * 2 * 3;
 		}
-		di += channels * 2 * 3;
 	}
-	return di;
+	*wn = di;
+	*rn = si;
+	return;
 }
 
-// The main body of the child process created by open_repack.
-// Reads DVD PCM from src, repacks, and writes to dst.
-static int repack_main(FILE *dst, FILE *src, int depth, int channels) {
-	u8 *buf, *dstbuf;
-	int bufsize, blocksize, blocks;
-	size_t n, wn;
+enum { repack_bufsize = 8192 };
 
-	// FIXME wrong for depth=20
-	blocksize = 2 * depth/8 * channels;
-	blocks = 500;
-	bufsize = blocksize * blocks;
+static int repack_write(struct writer* w, const u8* buf, int size)
+{
+	int wn, rn, err;
 
-	buf = malloc((size_t)bufsize);
-	dstbuf = malloc((size_t)bufsize);
-	if (buf == NULL || dstbuf == NULL) {
-		perror(NULL);
-		return 1;
-	}
-
-	for (;;) {
-		n = fread(buf, (size_t)blocksize, (size_t)blocks, src);
-		if (ferror(src)) {
-			perror("fread");
-		}
-		if (n == 0) {
-			break;
-		}
-		repack(dstbuf, buf, (int)n*blocksize, depth, channels);
-		wn = fwrite(dstbuf, (size_t)blocksize, n, dst);
-		if (wn < n) {
-			if (ferror(dst)) {
-				perror("fwrite");
+	while (size > 0) {
+		repack(w->buf, buf, repack_bufsize, size, w->depth, w->channels, &wn, &rn);
+		if (wn > 0) {
+			err = w->writer->write(w->writer, w->buf, wn);
+			if (err < 0) {
+				return err;
 			}
-			break;
 		}
-		if (ferror(src) || ferror(dst)) {
-			break;
+		if (rn > size) {
+			if (debug) {
+				abort(); // uh-oh
+			}
+			rn = size;
 		}
+		buf += rn;
+		size -= rn;
 	}
-
-	if (fflush(dst) == EOF) {
-		perror("fflush");
-	}
-
-	free(buf);
-	free(dstbuf);
-	fclose(dst);
-	fclose(src);
-
 	return 0;
 }
 
-FILE *open_repack(FILE* sink, struct lpcm_info info)
+static int repack_close(struct writer* w)
 {
-	int pid, err;
-	int fd[2];
-	FILE *f;
-
-	if (sink == NULL) {
-		return NULL;
-	}
-
-	err = pipe(fd);
-	if (err < 0) {
-		perror("open_repack: pipe");
-		return NULL;
-	}
-
-	pid = fork();
-	if (pid < 0) {
-		perror("open_repack: fork");
-		return NULL;
-	}
-	if (pid == 0) {
-		close(fd[1]);
-		f = fdopen(fd[0], "r");
-		_exit(repack_main(sink, f, info.bitdepth, info.channels));
-	}
-	close(fd[0]);
-	fclose(sink);
-	f = fdopen(fd[1], "w");
-	return f;
+	int err = w->writer->close(w->writer);
+	free(w->buf);
+	free(w);
+	return err;
 }
+
+struct writer* open_repack(struct writer* writer, struct lpcm_info info)
+{
+	struct writer* w;
+	u8 *buf;
+
+	w = malloc(sizeof *w);
+	if (w == NULL) {
+		return NULL;
+	}
+
+	buf = malloc((size_t)repack_bufsize);
+	if (buf == NULL) {
+		perror("malloc");
+		free(w);
+		return NULL;
+	}
+
+	w->write = repack_write;
+	w->close = repack_close;
+	w->writer = writer;
+	w->buf = buf;
+	w->depth = info.bitdepth;
+	w->channels = info.channels;
+	return w;
+}
+
 
 // Parse a decimal number and place it in *out.
 // Returns a pointer to the unparsed portion of the string.
@@ -794,25 +867,27 @@ int main(int argc, char *argv[])
 	}
 
 	char filename[5+10+4+1];
-	FILE *f;
+	struct writer* w;
 	for (int i = chapterstart; i < chapterend; i++) {
 		sprintf(filename, "track%02d%s", i+1, ext);
 		if (format == FORMAT_RAW) {
-			f = fopen(filename, "wb");
-			if (f == NULL) {
-				perror("fopen");
+			w = open_file(filename);
+			if (w == NULL) {
 				return 1;
 			}
 		} else if (format == FORMAT_FLAC) {
-			// TODO: clean up the processes that these create.
-			f = open_flac(filename, lpcm_info);
-			f = open_repack(f, lpcm_info);
-			if (f == NULL) {
+			struct writer* w0 = open_flac(filename, lpcm_info);
+			if (w0 == NULL) {
+				return 1;
+			}
+			w = open_repack(w0, lpcm_info);
+			if (w == NULL) {
+				w0->close(w0);
 				return 1;
 			}
 		}
-		dump_audio(f, vob, stream, audio_sector[i], audio_sector[i+1]);
-		fclose(f);
+		dump_audio(w, vob, stream, audio_sector[i], audio_sector[i+1]);
+		w->close(w);
 	}
 
 	DVDCloseFile(vob);
