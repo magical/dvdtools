@@ -1,7 +1,9 @@
+/* ac3strip - strip dynamic range info from an A/52 stream */
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <errno.h>
+#include "ac3bits.h"
 //#include "bitreader.h"
 
 struct bitreader {
@@ -26,7 +28,7 @@ struct bitwriter {
 int      getnbitsread(struct bitreader*);
 uint64_t readbits(struct bitreader*, int);
 void     writebits(struct bitwriter*, uint64_t, int);
-void grow(struct bitwriter*, int);
+void     grow(struct bitwriter*, int);
 
 // Get the total number of bits read.
 int
@@ -120,6 +122,7 @@ struct ac3 {
 };
 
 int ac3(struct bitwriter*, struct bitreader*);
+static int copy(struct ac3* a, int n);
 static int syncframe(struct ac3*);
 static void audblk(struct ac3*);
 
@@ -139,6 +142,21 @@ static int frmsizetab[3][38] = {{
 	768, 896, 896, 1024, 1024, 1152, 1152, 1280, 1280,
 }};
 
+static int sdecaytab[] = {0x0F, 0x11, 0x13, 0x15};
+static int fdecaytab[] = {0x3F, 0x53, 0x67, 0x7B};
+static int sgaintab[] = {0x540, 0x4D8, 0x478, 0x410};
+static int dbkneetab[] = {0x000, 0x700, 0x900, 0xB00};
+
+static int floortab[] = {
+	0x2F0, 0x2B0, 0x270, 0x230, 0x1F0, 0x170, 0x0F0,
+	0xF800, // -0x800?
+};
+
+ // fgaintab[i] = (i+1) * 0x80
+static int fgaintab[] = {
+	0x080, 0x100, 0x180, 0x200, 0x280, 0x300, 0x380, 0x400
+};
+
 // Copy and return n bits from a->br to a->bw.
 int
 copy(struct ac3 *a, int n)
@@ -154,7 +172,7 @@ copy(struct ac3 *a, int n)
 int
 ac3(struct bitwriter *bw, struct bitreader *br)
 {
-	struct ac3 a;
+	struct ac3 a = {0};
 	a.bw = bw;
 	a.br = br;
 	for (;;) {
@@ -295,8 +313,11 @@ audblk(struct ac3 *a)
 	int phsflginu;
 	cplinu = 0;
 	chincpl = 0;
-	phsflginu = 0;
+	cplbegf = 0;
+	cplendf = 0;
 	ncplbnd = 0;
+	ncplsubnd = 0;
+	phsflginu = 0;
 	if (copy(a, 1)) { // cplstre
 		cplinu = copy(a, 1); // cplinu
 		if (cplinu) {
@@ -351,6 +372,7 @@ audblk(struct ac3 *a)
 	int grp, ncplgrps, nchgrps;
 	int tmp;
 	cplexpstr = 0;
+	lfeexpstr = 0;
 	if (cplinu) {
 		cplexpstr = copy(a, 2); // cplexpstr
 	}
@@ -394,23 +416,26 @@ audblk(struct ac3 *a)
 
 	// Bit allocation
 	//
-	int cpldeltbae, deltbae[5], deltnseg;
+	struct balloc cplba, ba[5];
+	int cpldeltbae;
+	int sdecay, fdecay, sgain, dbknee, floor;
+	cpldeltbae = 0;
 	if (copy(a, 1)) { // baie
-		copy(a, 2); // sdcycod
-		copy(a, 2); // fdcycod
-		copy(a, 2); // sgaincod
-		copy(a, 2); // dbpbcod
-		copy(a, 2); // floorcod
+		sdecay = sdecaytab[copy(a, 2)]; // sdcycod
+		fdecay = fdecaytab[copy(a, 2)]; // fdcycod
+		sgain = sgaintab[copy(a, 2)]; // sgaincod
+		dbknee = dbkneetab[copy(a, 2)]; // dbpbcod
+		floor = floortab[copy(a, 2)]; // floorcod
 	}
 	if (copy(a, 1)) { // snroffste
 		copy(a, 6); // csnroffst
 		if (cplinu) {
-			copy(a, 4); // cplfsnroffst
-			copy(a, 3); // cplfgaincod
+			cplba.fsnroffst = copy(a, 4); // cplfsnroffst
+			cplba.fgain = fgaintab[copy(a, 3)]; // cplfgaincod
 		}
 		for (ch = 0; ch < nfchans; ch++) {
-			copy(a, 4); // fsnroffst
-			copy(a, 3); // fgaincod
+			ba[ch].fsnroffst = copy(a, 4); // fsnroffst
+			ba[ch].fgain = fgaintab[copy(a, 3)]; // fgaincod
 		}
 		if (a->lfeon) {
 			copy(a, 4); // lfefsnroffst
@@ -419,8 +444,8 @@ audblk(struct ac3 *a)
 	}
 	if (cplinu) {
 		if (copy(a, 1)) { // cplleake
-			copy(a, 3); // cplfleak
-			copy(a, 3); // cplsleak
+			cplba.fleak = copy(a, 3); // cplfleak
+			cplba.sleak = copy(a, 3); // cplsleak
 		}
 	}
 	if (copy(a, 1)) { // deltbaie
@@ -428,28 +453,45 @@ audblk(struct ac3 *a)
 			cpldeltbae = copy(a, 2); // cpldeltdae
 		}
 		for (ch = 0; ch < nfchans; ch++) {
-			deltbae[ch] = copy(a, 2); // deltdae[ch]
+			ba[ch].deltbae = copy(a, 2); // deltdae[ch]
 		}
 		if (cplinu) {
 			if (cpldeltbae == 1) {
-				deltnseg = copy(a, 3); // deltnseg
-				for (seg = 0; seg < deltnseg; seg++) {
-					copy(a, 5); // deltoffst
-					copy(a, 4); // deltlen
-					copy(a, 3); // deltba
+				cplba.deltnseg = copy(a, 3); // deltnseg
+				for (seg = 0; seg < cplba.deltnseg; seg++) {
+					cplba.deltoffst[seg] = copy(a, 5); // deltoffst
+					cplba.deltlen[seg] = copy(a, 4); // deltlen
+					cplba.deltba[seg] = copy(a, 3); // deltba
 				}
 			}
 		}
 		for (ch = 0; ch < nfchans; ch++) {
-			if (deltbae[ch] == 1) {
-				deltnseg = copy(a, 3); // deltnseg
-				for (seg = 0; seg < deltnseg; seg++) {
-					copy(a, 5); // deltoffst
-					copy(a, 4); // deltlen
-					copy(a, 3); // deltba
+			if (ba[ch].deltbae == 1) {
+				ba[ch].deltnseg = copy(a, 3); // deltnseg
+				for (seg = 0; seg < ba[ch].deltnseg; seg++) {
+					ba[ch].deltoffst[seg] = copy(a, 5); // deltoffst
+					ba[ch].deltlen[seg] = copy(a, 4); // deltlen
+					ba[ch].deltba[seg] = copy(a, 3); // deltba
 				}
 			}
 		}
+	}
+
+	int strtmant, endmant;
+	for (ch = 0; ch < nfchans; ch++) {
+		strtmant = 0;
+		if ((chincpl & 1<<ch)) {
+			endmant = 37 + 12*cplbegf;
+		} else {
+			endmant = 37 + 3*(chbwcod[ch] + 12);
+		}
+		bit_allocation(a->bap, &ba[ch], a->fscod, strtmant, endmant, sdecay, fdecay, sgain, dbknee, floor);
+	}
+
+	if (cplinu) {
+		strtmant = 37 + 12*cplbegf;
+		endmant = 37 + 12*(cplendf+3);
+		bit_allocation(a->bap, &ba[ch], a->fscod, strtmant, endmant, sdecay, fdecay, sgain, dbknee, floor);
 	}
 
 	// Skip bytes

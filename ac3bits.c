@@ -1,3 +1,5 @@
+/* ac3bits - bit allocation calculations for A/52 */
+#include "ac3bits.h"
 #include "ac3tab.c"
 
 int abs(int);
@@ -51,12 +53,12 @@ logadd(int a, int b) {
 }
 
 int
-bit_allocation(int *bapp, int start, int end, int fgain, int snroffset) {
-	int exp[256];
-	int deltbae, deltnseg, deltoffst[8], deltlen[8], deltba[8];
-	int sdecay, fdecay, sgain, dbknee, floor;
-	int fscod;
-
+bit_allocation(
+	int *bapout,
+	struct balloc *ba, int fscod,
+	int start, int end,
+	int sdecay, int fdecay, int sgain, int dbknee, int floor
+) {
 	int psd[256], bndpsd[50], mask[50], bap[256];
 
 	int fastleak, slowleak;
@@ -68,7 +70,7 @@ bit_allocation(int *bapp, int start, int end, int fgain, int snroffset) {
 
 	// Exponent mapping into power-spectral density. 7.2.2.2
 	for (bin = start; bin < end; bin++) {
-		psd[bin] = (24 - exp[bin]) << 7;
+		psd[bin] = (24 - ba->exp[bin]) << 7;
 	}
 
 	// PSD integration. 7.2.2.3
@@ -91,15 +93,15 @@ bit_allocation(int *bapp, int start, int end, int fgain, int snroffset) {
 	bndend = masktab[end - 1] + 1;
 	if (bndstrt == 0) { // full bandwidth and lfe
 		lowcomp = calc_lowcomp(lowcomp, bndpsd[0], bndpsd[1], 0);
-		excite[0] = bndpsd[0] - fgain - lowcomp;
+		excite[0] = bndpsd[0] - ba->fgain - lowcomp;
 		lowcomp = calc_lowcomp(lowcomp, bndpsd[1], bndpsd[2], 1);
-		excite[1] = bndpsd[1] - fgain - lowcomp;
+		excite[1] = bndpsd[1] - ba->fgain - lowcomp;
 		begin = 7;
 		for (band = 2; band < 7; band++) {
 			if (!(bndend == 7 && band == 6)) {
 				lowcomp = calc_lowcomp(lowcomp, bndpsd[band], bndpsd[band+1], band);
 			}
-			fastleak = bndpsd[band] - fgain;
+			fastleak = bndpsd[band] - ba->fgain;
 			slowleak = bndpsd[band] - sgain;
 			excite[band] = fastleak - lowcomp;
 			if (!(bndend == 7 && band == 6)) {
@@ -113,18 +115,18 @@ bit_allocation(int *bapp, int start, int end, int fgain, int snroffset) {
 			if (bndend == 7 && band == 6) {
 				lowcomp = calc_lowcomp(lowcomp, bndpsd[band], bndpsd[band+1], band);
 			}
-			fastleak = max(fastleak - fdecay, bndpsd[band] - fgain);
+			fastleak = max(fastleak - fdecay, bndpsd[band] - ba->fgain);
 			slowleak = max(slowleak - sdecay, bndpsd[band] - sgain);
 			excite[band] = max(fastleak - lowcomp, slowleak);
 		}
 		begin = 22;
 	} else { // coupled
 		begin = bndstrt;
-		//fastleak = (cplfleak + 3) << 8;
-		//slowleak = (cplsleak + 3) << 8;
+		fastleak = (ba->fleak + 3) << 8;
+		slowleak = (ba->sleak + 3) << 8;
 	}
 	for (band = begin; band < bndend; band++) {
-		fastleak = max(fastleak - fdecay, bndpsd[band] - fgain);
+		fastleak = max(fastleak - fdecay, bndpsd[band] - ba->fgain);
 		slowleak = max(slowleak - sdecay, bndpsd[band] - sgain);
 		excite[band] = max(fastleak, slowleak);
 	}
@@ -138,12 +140,12 @@ bit_allocation(int *bapp, int start, int end, int fgain, int snroffset) {
 	}
 
 	// Delta bit allocation. 7.2.2.6
-	if (deltbae == 0 || deltbae == 1) {
+	if (ba->deltbae == 0 || ba->deltbae == 1) {
 		band = 0;
-		for (seg = 0; seg < deltnseg+1; seg++) {
-			band += deltoffst[seg];
-			delta = (deltba[seg] + (deltba[seg] >= 4) - 4) << 7;
-			for (i = 0; i < deltlen[seg]; i++) {
+		for (seg = 0; seg < ba->deltnseg+1; seg++) {
+			band += ba->deltoffst[seg];
+			delta = (ba->deltba[seg] + (ba->deltba[seg] >= 4) - 4) << 7;
+			for (i = 0; i < ba->deltlen[seg]; i++) {
 				mask[band] += delta;
 				band++;
 			}
@@ -155,7 +157,7 @@ bit_allocation(int *bapp, int start, int end, int fgain, int snroffset) {
 	band = masktab[start];
 	do {
 		lastbin = min(bndtab[band] + bndsz[band], end);
-		mask[band] -= snroffset;
+		mask[band] -= ba->fsnroffst;
 		mask[band] -= floor;
 		if (mask[band] < 0) {
 			mask[band] = 0;
@@ -172,7 +174,7 @@ bit_allocation(int *bapp, int start, int end, int fgain, int snroffset) {
 
 	// Output
 	for (bin = 0; bin < 256; bin++) {
-		bapp[bin] = bap[bin];
+		bapout[bin] = bap[bin];
 	}
 
 	return 0;

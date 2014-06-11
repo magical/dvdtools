@@ -3,5 +3,6 @@ lsdvd
 layers
 dvdbreakpoints
 extractaudio
+ac3strip
 
 bitreader_test

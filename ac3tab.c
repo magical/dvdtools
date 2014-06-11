@@ -1,16 +1,4 @@
-static int sdecaytab[] = {0x0F, 0x11, 0x13, 0x15};
-static int fdecaytab[] = {0x3F, 0x53, 0x67, 0x7B};
-static int sgaintab[] = {0x540, 0x4D8, 0x478, 0x410};
-static int dbkneetab[] = {0x000, 0x700, 0x900, 0xB00};
-
-static int floortab[] = {
-	0x2F0, 0x2B0, 0x270, 0x230, 0x1F0, 0x170, 0x0F0,
-	0xF800, // -0x800?
-};
- // fgaintab[i] = (i+1) * 0x80
-static int fgaintab[] = {
-	0x080, 0x100, 0x180, 0x200, 0x280, 0x300, 0x380, 0x400
-};
+/* ac3tab - tables for A/52 decoding */
 
 static int bndsz[50] = {
 	1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
@@ -20,6 +8,7 @@ static int bndsz[50] = {
 	12, 12, 12, 12,
 	24, 24, 24, 24, 24,
 };
+
 static int bndtab[50] = {
 	0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
 	16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27,
