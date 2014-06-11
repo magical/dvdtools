@@ -869,7 +869,7 @@ int main(int argc, char *argv[])
 	char filename[5+10+4+1];
 	struct writer* w;
 	for (int i = chapterstart; i < chapterend; i++) {
-		sprintf(filename, "track%02d%s", i+1, ext);
+		snprintf(filename, sizeof filename, "track%02d%s", i+1, ext);
 		if (format == FORMAT_RAW) {
 			w = open_file(filename);
 			if (w == NULL) {
