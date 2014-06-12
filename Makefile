@@ -1,5 +1,5 @@
 
-CFLAGS=-std=c99 -pedantic -Wall -Wextra -Wconversion -Wshadow -Wno-missing-field-initializers
+CFLAGS=-O2 -std=c99 -pedantic -Wall -Wextra -Wconversion -Wshadow -Wno-missing-field-initializers
 
 all: lsdvd catdvd layers dvdbreakpoints extractaudio
 test: bitreader_test
