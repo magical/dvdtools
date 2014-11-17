@@ -8,7 +8,7 @@ test: bitreader_test
 lsdvd: lsdvd.c bitreader.c bitreader.h uint.h Makefile
 	$(CC) $(CFLAGS) -o lsdvd lsdvd.c bitreader.c -ldvdread
 catdvd: catdvd.c Makefile
-	$(CC) $(CFLAGS) -o catdvd catdvd.c -ldvdread -ldvdcss
+	$(CC) $(CFLAGS) -ggdb -I../libdvdcss/src -o catdvd catdvd.c -ldvdread ../libdvdcss/src/.libs/libdvdcss.a
 layers: layers.c Makefile
 	$(CC) $(CFLAGS) -o $@ $<
 dvdbreakpoints: dvdbreakpoints.c bitreader.c bitreader.h uint.h Makefile

@@ -1,7 +1,8 @@
 
 #include <stdlib.h>
 #include <stdio.h>
-#include <dvdcss/dvdcss.h>
+#include <stdbool.h>
+#include "dvdcss/dvdcss.h"
 #include <dvdread/dvd_reader.h>
 #include <dvdread/dvd_udf.h>
 #include <dvdread/ifo_read.h>
@@ -9,31 +10,39 @@
 // We need to build a map of sectors in a title
 // The top menu, each title menu, and each titleset have separate keys
 
+enum {
+	T_VOB,
+	T_AOB,
+	T_AUDIO_VOB,
+};
+
 struct vob {
-	size_t start;
-	size_t end;
+	long start;
+	long end;
+	int type;
 };
 struct vob *vobs;
-size_t voblen;
-size_t vobcap;
+int voblen;
+int vobcap;
 
 uint8_t block[2048];
 
-void add_vob(size_t start, size_t end)
+void add_vob(long start, long len, int type)
 {
 	while (voblen >= vobcap) {
 		vobcap = vobcap * 2;
 		if (vobcap == 0) {
 			vobcap = 10;
 		}
-		vobs = realloc(vobs, vobcap * sizeof(struct vob));
+		vobs = realloc(vobs, (size_t)vobcap * sizeof(struct vob));
 		if (vobs == NULL) {
 			fputs("Couldn't allocate memory\n", stderr);
 			exit(1);
 		}
 	}
 	vobs[voblen].start = start;
-	vobs[voblen].end = end;
+	vobs[voblen].end = start + len - 1;
+	vobs[voblen].type = type;
 	voblen++;
 }
 
@@ -47,14 +56,118 @@ int vob_cmp(const void *v0, const void *v1)
 	return 0;
 }
 
+int load_video(dvd_reader_t *dvd) {
+	ifo_handle_t *ifo0 = NULL;
+	uint32_t size, start;
+	int title, titlesets;
+
+	ifo0 = ifoOpen(dvd, 0);
+	if (ifo0 == NULL) {
+		return 1;
+	}
+	titlesets = ifo0->vmgi_mat->vmg_nr_of_title_sets;
+	ifoClose(ifo0);
+
+	// Top menu
+	start = UDFFindFile(dvd, "/VIDEO_TS/VIDEO_TS.VOB", &size);
+	if (start == 0) {
+		fprintf(stderr, "Couldn't open VIDEO_TS.VOB");
+	}
+
+	add_vob((long)start, (long)size/0x800, T_VOB);
+
+	for (title = 1; title <= titlesets; title++) {
+		char fn[] = "/VIDEO_TS/VTS_??_?.VOB";
+		int64_t total_size;
+
+		// Menu
+		// note: C99 snprintf always NUL-terminates.
+		snprintf(fn, sizeof(fn), "/VIDEO_TS/VTS_%02d_0.VOB", title);
+		start = UDFFindFile(dvd, fn, &size);
+		if (start == 0) {
+			fprintf(stderr, "Couldn't find menu for titleset %d\n", title);
+		} else {
+			add_vob((long)start, (long)size/0x800, T_VOB);
+		}
+
+		snprintf(fn, sizeof(fn), "/VIDEO_TS/VTS_%02d_1.VOB", title);
+		start = UDFFindFile(dvd, fn, &size);
+		total_size = (int64_t)size;
+		if (start == 0) {
+			fprintf(stderr, "Couldn't find VOB for titleset %d\n", title);
+		} else {
+			fprintf(stderr, "%s: %ld\n", fn, (long)size);
+			for (int j = 2; j < 10; j++) {
+				uint32_t size1, start1;
+				snprintf(fn, sizeof(fn), "/VIDEO_TS/VTS_%02d_%d.VOB", title, j);
+				start1 = UDFFindFile(dvd, fn, &size1);
+				if (start1 == 0) {
+					break;
+				}
+				fprintf(stderr, "%s: %ld\n", fn, (long)size1);
+				total_size += size1;
+			}
+			add_vob((long)start, (long)(total_size/0x800), T_VOB);
+		}
+	}
+	return 0;
+}
+
+int load_audio(dvd_reader_t *dvd)
+{
+	uint32_t size, start;
+	int title;
+
+	// Top menu
+	start = UDFFindFile(dvd, "/AUDIO_TS/AUDIO_TS.VOB", &size);
+	if (start == 0) {
+		// No audio layer.
+		fprintf(stderr, "No audio layer\n");
+		return 0;
+	}
+	add_vob((long)start, (long)size/0x800, T_AUDIO_VOB);
+
+	start = UDFFindFile(dvd, "/AUDIO_TS/AUDIO_SV.VOB", &size);
+	if (start != 0) {
+		add_vob((long)start, (long)size/0x800, T_AUDIO_VOB);
+	}
+
+	for (title = 1; title <= 99; title++) {
+		int64_t total_size = 0;
+		char fn[] = "/AUDIO_TS/ATS_??_?.AOB";
+
+		snprintf(fn, sizeof(fn), "/AUDIO_TS/ATS_%02d_1.AOB", title);
+		start = UDFFindFile(dvd, fn, &size);
+		total_size = (int64_t)size;
+		if (start == 0) {
+			fprintf(stderr, "Couldn't find AOB for titleset %d\n", title);
+			break;
+		}
+		for (int j = 2; j < 10; j++) {
+			uint32_t size1, start1;
+			snprintf(fn, sizeof(fn), "/AUDIO_TS/ATS_%02d_%d.AOB", title, j);
+			start1 = UDFFindFile(dvd, fn, &size1);
+			if (start1 == 0) {
+				break;
+			}
+			fprintf(stderr, "%s: %ld\n", fn, (long)size1);
+			total_size += (int64_t)size1;
+		}
+		//fprintf(stderr, "size: %lld\n", total_size);
+		add_vob((long)start, (long)(total_size/0x800), T_AOB);
+	}
+	return 0;
+
+}
+
 int main(int argc, char *argv[])
 {
 	dvd_reader_t *dvd = NULL;
-	ifo_handle_t *ifo0 = NULL;
 	dvdcss_t dvdcss = NULL;
 	char *dvd_filename = NULL;
-	uint32_t size, start;
-	int titlesets;
+	uint32_t mkb_start, mkb_size;
+	uint8_t *mkb;
+	int err, errors, flags;
 
 	if (argc == 2) {
 		dvd_filename = argv[1];
@@ -68,63 +181,26 @@ int main(int argc, char *argv[])
 	if (dvd == NULL) {
 		return 1;
 	}
-	ifo0 = ifoOpen(dvd, 0);
-	if (ifo0 == NULL) {
+
+	mkb_start = UDFFindFile(dvd, "/AUDIO_TS/DVDAUDIO.MKB", &mkb_size);
+
+	load_video(dvd);
+	load_audio(dvd);
+
+	if (dvd != NULL) {
 		DVDClose(dvd);
-		return 1;
 	}
 
-	titlesets = ifo0->vmgi_mat->vmg_nr_of_title_sets;
+	qsort(vobs, (size_t)voblen, sizeof(*vobs), vob_cmp);
 
-	ifoClose(ifo0);
-
-	// Top menu
-	start = UDFFindFile(dvd, "/VIDEO_TS/VIDEO_TS.VOB", &size);
-	if (start == 0) {
-		fprintf(stderr, "Couldn't open VIDEO_TS.VOB");
-	}
-
-	//add_vob(
-	//	vmg_start + ifo0->vmgi_mat->vbgm_vobs,
-	//	vmg_start + ifo0->vmgi_mat->vmg_last_sector - vmgi_last_sector
-	//);
-	add_vob(start, start + (size - 1)/0x800);
-
-	for (int i = 0; i < titlesets; i++) {
-		char fn[] = "/VIDEO_TS/VTS_??_?.VOB";
-
-		// Menu
-		// note: C99 snprintf always NUL-terminates.
-		snprintf(fn, sizeof(fn), "/VIDEO_TS/VTS_%02d_0.VOB", i+1);
-		start = UDFFindFile(dvd, fn, &size);
-		if (start == 0) {
-			fprintf(stderr, "Couldn't find menu for titleset %d\n", i+1);
-		} else {
-			add_vob(start, start + (size - 1)/0x800);
+	for (int i = 0; i < voblen; i++) {
+		const char* type = "VOB";
+		switch (vobs[i].type) {
+		case T_AOB:     type = "AOB"; break;
+		case T_AUDIO_VOB: type = "AUDIO_TS/VOB"; break;
 		}
-
-		snprintf(fn, sizeof(fn), "/VIDEO_TS/VTS_%02d_1.VOB", i+1);
-		start = UDFFindFile(dvd, fn, &size);
-		if (start == 0) {
-			fprintf(stderr, "Couldn't find vob for titleset %d\n", i+1);
-		} else {
-			for (int j = 2; j < 10; j++) {
-				uint32_t size1, start1;
-				snprintf(fn, sizeof(fn), "/VIDEO_TS/VTS_%02d_%d.VOB", i+1, j);
-				start1 = UDFFindFile(dvd, fn, &size1);
-				if (start1 == 0) {
-					break;
-				}
-				size += size1;
-			}
-			add_vob(start, start + (size - 1)/0x800);
-		}
+		fprintf(stderr, "%s: %ld,%ld\n", type, vobs[i].start, vobs[i].end);
 	}
-
-	if (dvd != NULL)
-		DVDClose(dvd);
-
-	qsort(vobs, voblen, sizeof(*vobs), vob_cmp);
 
 	dvdcss = dvdcss_open(dvd_filename);
 	if (dvdcss == NULL) {
@@ -132,26 +208,55 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
-	for (size_t i = 0; i < voblen; i++) {
-		fprintf(stderr, "%d,%d\n", vobs[i].start, vobs[i].end);
+	// Try to read DVD-Audio key.
+	if (mkb_start) {
+		mkb = malloc(mkb_size);
+		err = dvdcss_seek(dvdcss, (int)mkb_start, DVDCSS_NOFLAGS);
+		if (err < 0) {
+			fprintf(stderr, "Seek error: %s\n", dvdcss_error(dvdcss));
+			return 1;
+		}
+		err = dvdcss_read(dvdcss, mkb, (int)(mkb_size/0x800), DVDCSS_NOFLAGS);
+		if (err < 1) {
+			fprintf(stderr, "Error reading DVDAUDIO.MKB: %s\n", dvdcss_error(dvdcss));
+			return 1;
+		}
+		err = dvdcss_init_cppm(dvdcss, mkb, mkb_size);
+		if (err < 0) {
+			fprintf(stderr, "Error processing DVDAUDIO.MKB: %s\n", dvdcss_error(dvdcss));
+			return 1;
+		}
+
+		err = dvdcss_seek(dvdcss, 0, DVDCSS_NOFLAGS);
+		if (err < 0) {
+			fprintf(stderr, "Error seeking to beginning of DVD.\n");
+			return 1;
+		}
 	}
 
-	struct vob *vob = NULL;
-	size_t vobi = 0;
-	for (size_t lb = 0; ; lb++) {
-		int err, flags;
-		if (vob == NULL && vobi < voblen) {
-			vob = &vobs[vobi];
+	struct vob *vob, *lastvob;
+	bool invob = false;
+	int lb = 0;
+	vob = &vobs[0];
+	lastvob = &vobs[voblen-1];
+	dvdcss_seek(dvdcss, lb, 0);
+	errors = 0;
+	for (; ; lb++) {
+		while (vob->end < lb && vob < lastvob) {
+			vob++;
 		}
-		if (vob != NULL && vob->start == lb) {
+		invob = (vob->start <= lb && lb <= vob->end);
+		if (vob->start == lb && vob->type == T_VOB) {
 			err = dvdcss_seek(dvdcss, (int)lb, DVDCSS_SEEK_KEY);
 			if (err < 0) {
 				fprintf(stderr, "Seek error: %s\n", dvdcss_error(dvdcss));
 				return 1;
 			}
 		}
-		if (vob != NULL && vob->start <= lb && lb <= vob->end) {
+		if (invob && vob->type == T_VOB) {
 			flags = DVDCSS_READ_DECRYPT;
+		} else if (invob && (vob->type == T_AOB || vob->type == T_AUDIO_VOB)) {
+			flags = DVDCSS_READ_DECRYPT_CPPM;
 		} else {
 			flags = DVDCSS_NOFLAGS;
 		}
@@ -163,27 +268,27 @@ int main(int argc, char *argv[])
 			break; // EOF?
 		}
 
-		if (vob != NULL && vob->end <= lb) {
-			vob = NULL;
-			vobi += 1;
+		if (fwrite(block, sizeof(block), 1, stdout) != 1) {
+			return 1;
 		}
 
 		// Debugging
 		if (block[0] == 0 && block[1] == 0 && block[2] == 1 && block[3] == 0xba) {
 			//uint8_t *b = block;
 			//b = b + 14 + (b[13] & 7);
-			if (flags != DVDCSS_READ_DECRYPT) {
-				fprintf(stderr, "Found MPEG data outside a VOB\n");
-				return 1;
+			if (!invob) {
+				fprintf(stderr, "Block %d: Found MPEG data outside a VOB\n", lb);
+				errors++;
 			}
 		} else {
-			if (flags != DVDCSS_NOFLAGS) {
-				fprintf(stderr, "Found non-MPEG data inside a VOB\n");
-				return 1;
+			if (invob && vob->type != T_AUDIO_VOB) {
+				fprintf(stderr, "Block %d: Found non-MPEG data inside a VOB\n", lb);
+				errors++;
 			}
 		}
 
-		if (fwrite(block, sizeof(block), 1, stdout) != 1) {
+		if (errors > 30) {
+			fprintf(stderr, "Too many errors.\n");
 			return 1;
 		}
 	}
