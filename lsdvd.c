@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdbool.h>
+#include <inttypes.h>
 #include <dvdread/dvd_reader.h>
 #include <dvdread/ifo_read.h>
 #include "uint.h"
@@ -397,10 +398,10 @@ int main(int argc, char *argv[])
 				t = time_from_scr(scr);
 				d = time_from_scr(scr - last_scr);
 				printf("%d,%d:", j, k);
-				printf(" %llu (%u:%02u:%06.3f)", scr,
+				printf(" %"PRIu64" (%u:%02u:%06.3f)", scr,
 					t.hour, t.min, t.sec + t.nano / 1e9);
 				if (last_scr <= scr) {
-					printf(" %10llu (%u:%02u:%06.3f)", scr - last_scr,
+					printf(" %10"PRIu64" (%u:%02u:%06.3f)", scr - last_scr,
 						d.hour, d.min, d.sec + d.nano / 1e9);
 				}
 				printf("\n");
@@ -420,10 +421,10 @@ int main(int argc, char *argv[])
 					d = time_from_pts(pts - last_pts[a]);
 					printf("%d,%d,%d:", j, k, a);
 					printf(" %6d", audio_sector);
-					printf(" %10llu (%u:%02u:%06.3f)", pts,
+					printf(" %10"PRIu64" (%u:%02u:%06.3f)", pts,
 						t.hour, t.min, t.sec + t.nano / 1e9);
 					if (last_pts[a] <= pts) {
-						printf(" %10llu (%u:%02u:%06.3f)", pts - last_pts[a],
+						printf(" %10"PRIu64" (%u:%02u:%06.3f)", pts - last_pts[a],
 							d.hour, d.min, d.sec + d.nano / 1e9);
 					}
 					printf("\n");
