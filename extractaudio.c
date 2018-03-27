@@ -817,12 +817,16 @@ int main(int argc, char *argv[])
 
 		audio_sector[i] = get_audio_sector(vob, (int)pb->first_sector, (int)audio);
 		if (audio_sector[i] < 0) {
-			if (i == chapters - 1) {
-				audio_sector[i] = (int)pb->first_sector;
-				chapters--;
-				break;
+			if (i != chapters - 1) {
+				if (i < chapterstart-1) {
+					fprintf(stderr, "warning: chapter %d: Couldn't get audio sector\n", i);
+				} else {
+					die("chapter %d: Couldn't get audio sector", i);
+				}
 			}
-			die("chapter %d: Couldn't get audio sector", i);
+			audio_sector[i] = (int)pb->first_sector;
+			chapters = i;
+			break;
 		}
 		if (i == chapters - 1) {
 			audio_sector[chapters] = (int)pb->last_sector;
