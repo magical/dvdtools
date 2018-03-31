@@ -106,7 +106,7 @@ grow(struct bitwriter *bw, int to)
 
 // Step 1: Round-trip
 
-#define SYNCWORD 0x00B7
+#define SYNCWORD 0x0B77
 
 struct ac3 {
 	struct bitwriter *bw;
@@ -187,8 +187,11 @@ ac3(struct bitwriter *bw, struct bitreader *br)
 	a.bw = bw;
 	a.br = br;
 	for (;;) {
-		syncframe(&a);
+		if (syncframe(&a) < 0) {
+			break;
+		}
 	}
+	return 0;
 }
 
 /* Appologies for the terrible variable names. They're straight from the spec. */
@@ -598,8 +601,9 @@ static int copymant(struct ac3 *a, int bap)
 
 int main()
 {
-	struct bitwriter bw;
-	struct bitreader br;
+	struct bitwriter bw = {NULL};
+	struct bitreader br = {stdin};
 	ac3(&bw, &br);
+	fwrite(bw.buf, 1, bw.len, stdout);
 	return 0;
 }
