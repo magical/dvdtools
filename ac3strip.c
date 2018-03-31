@@ -6,6 +6,8 @@
 #include "ac3bits.h"
 //#include "bitreader.h"
 
+static int debug = 1;
+
 struct bitreader {
 	FILE *f;
 	int nread; // number of bytes read
@@ -126,7 +128,7 @@ struct ac3 {
 };
 
 int ac3(struct bitwriter*, struct bitreader*);
-static int copy(struct ac3* a, int n);
+static int copy(struct ac3* a, int n, const char *var);
 static int syncframe(struct ac3*);
 static void audblk(struct ac3*);
 static int copymant(struct ac3 *a, int bap);
@@ -170,13 +172,16 @@ static int quantization_tab[16] = {
 
 // Copy and return n bits from a->br to a->bw.
 int
-copy(struct ac3 *a, int n)
+copy(struct ac3 *a, int n, const char* var)
 {
 	uint64_t bits = readbits(a->br, n);
 	if (a->br->err) {
 		return 0;
 	}
 	writebits(a->bw, bits, n);
+	if (debug && var && var[0]) {
+		fprintf(stderr, "%s: %lld\n", var, (long long int)bits);
+	}
 	return (int)bits;
 }
 
@@ -209,63 +214,63 @@ syncframe(struct ac3 *a)
 		return -1;
 	}
 	writebits(a->bw, (uint64_t)syncword, 16);
-	copy(a, 16); // crc1
-	a->fscod      = copy(a, 2); // fscod
-	a->frmsizecod = copy(a, 6); // frmsizecod
+	copy(a, 16, "crc1");
+	a->fscod      = copy(a, 2, "fscod");
+	a->frmsizecod = copy(a, 6, "frmsizecod");
 
 	// We'll come back later to fix the CRC.
 
 	// Bit stream information
 	//
-	copy(a, 5); // bsid
-	copy(a, 3); // bsmod
-	a->acmod = copy(a, 3); // acmod
+	copy(a, 5, "bsid");
+	copy(a, 3, "bsmod");
+	a->acmod = copy(a, 3, "acmod");
 	if ((a->acmod & 1) && a->acmod != 1) {
-		copy(a, 2); // cmixlev
+		copy(a, 2, "cmixlev");
 	}
 	if (a->acmod & 4) {
-		copy(a, 2); // surmixlev
+		copy(a, 2, "surmixlev");
 	}
 	if (a->acmod == 2) {
-		copy(a, 2); // dsurmod
+		copy(a, 2, "dsurmod");
 	}
-	a->lfeon = copy(a, 1); // lfeon
-	copy(a, 5); // dialnorm
-	if (copy(a, 1)) { // compre
-		copy(a, 8); // compr
+	a->lfeon = copy(a, 1, "lfeon");
+	copy(a, 5, "dialnorm");
+	if (copy(a, 1, "compre")) {
+		copy(a, 8, "compr");
 	}
-	if (copy(a, 1)) { // langcode
-		copy(a, 8); // langcod
+	if (copy(a, 1, "langcode")) {
+		copy(a, 8, "langcod");
 	}
-	if (copy(a, 1)) { // audprodie
-		copy(a, 5); // mixlevel
-		copy(a, 2); // roomtyp
+	if (copy(a, 1, "audprodie")) {
+		copy(a, 5, "mixlevel");
+		copy(a, 2, "roomtyp");
 	}
 	if (a->acmod == 0) {
-		copy(a, 5); // dialnorm2
-		if (copy(a, 1)) { // compr2e
-			copy(a, 8); // compr2
+		copy(a, 5, "dialnorm2");
+		if (copy(a, 1, "compr2e")) {
+			copy(a, 8, "compr2");
 		}
-		if (copy(a, 1)) { // langcod2e
-			copy(a, 8); // langcod2
+		if (copy(a, 1, "langcod2e")) {
+			copy(a, 8, "langcod2");
 		}
-		if (copy(a, 1)) { // audprodi2e
-			copy(a, 5); // mixlevel2
-			copy(a, 2); // roomtyp2
+		if (copy(a, 1, "audprodi2e")) {
+			copy(a, 5, "mixlevel2");
+			copy(a, 2, "roomtyp2");
 		}
 	}
-	copy(a, 1); // copyrightb
-	copy(a, 1); // origbe
-	if (copy(a, 1)) { // timecod1e
-		copy(a, 14); // timecod1
+	copy(a, 1, "copyrightb");
+	copy(a, 1, "origbe");
+	if (copy(a, 1, "timecod1e")) {
+		copy(a, 14, "timecod1");
 	}
-	if (copy(a, 1)) { // timecod2e
-		copy(a, 14); // timecod2
+	if (copy(a, 1, "timecod2e")) {
+		copy(a, 14, "timecod2");
 	}
-	if (copy(a, 1)) { // addbsie
-		addbsil = copy(a, 6); // addbsil
+	if (copy(a, 1, "addbsie")) {
+		addbsil = copy(a, 6, "addbsil");
 		for (i = 0; i < addbsil + 1; i++) {
-			copy(a, 8); // addbsi
+			copy(a, 8, "addbsi");
 		}
 	}
 
@@ -280,17 +285,17 @@ syncframe(struct ac3 *a)
 	nauxbits = frmsizetab[a->fscod][a->frmsizecod] * 16;
 	nauxbits -= getnbitsread(a->br);
 	while (nauxbits >= 16) {
-		copy(a, 16);
+		copy(a, 16, "");
 		nauxbits -= 16;
 	}
-	copy(a, nauxbits);
-	copy(a, 14); // auxdatal
-	copy(a, 1); // auxdatae
+	copy(a, nauxbits, "");
+	copy(a, 14, "auxdatal");
+	copy(a, 1, "auxdatae");
 
 	// Final CRC
 	//
-	crcrsv = copy(a, 1); // crcrsv
-	crc2 = copy(a, 16); // crc2
+	crcrsv = copy(a, 1, "crcrsv");
+	crc2 = copy(a, 16, "crc2");
 
 	(void)crcrsv;
 	(void)crc2;
@@ -306,16 +311,16 @@ audblk(struct ac3 *a)
 
 	nfchans = nfchanstab[a->acmod];
 
-	copy(a, nfchans); // blksw[ch]
-	copy(a, nfchans); // dlithflag[ch]
+	copy(a, nfchans, "blksw[ch]");
+	copy(a, nfchans, "dlithflag[ch]");
 
-	if (copy(a, 1)) { // dynrange
-		copy(a, 8); // dynrang
+	if (copy(a, 1, "dynrange")) {
+		copy(a, 8, "dynrang");
 	}
 
 	if (a->acmod == 0) {
-		if (copy(a, 1)) { // dynrang2e
-			copy(a, 8); // dynrang2
+		if (copy(a, 1, "dynrang2e")) {
+			copy(a, 8, "dynrang2");
 		}
 	}
 
@@ -332,49 +337,49 @@ audblk(struct ac3 *a)
 	ncplbnd = 0;
 	ncplsubnd = 0;
 	phsflginu = 0;
-	if (copy(a, 1)) { // cplstre
-		cplinu = copy(a, 1); // cplinu
+	if (copy(a, 1, "cplstre")) {
+		cplinu = copy(a, 1, "cplinu");
 		if (cplinu) {
-			chincpl = copy(a, nfchans); // chincpl
+			chincpl = copy(a, nfchans, "chincpl");
 			if (a->acmod == 2) {
-				phsflginu = copy(a, 1); // phsflginu
+				phsflginu = copy(a, 1, "phsflginu");
 			}
-			cplbegf = copy(a, 4); // cplbegf
-			cplendf = copy(a, 4) + 3; // cplendf
+			cplbegf = copy(a, 4, "cplbegf");
+			cplendf = copy(a, 4, "cplendf") + 3;
 			cplstrtmant = cplbegf*12 + 37;
 			cplendmant = cplendf*12 + 37;
 			ncplsubnd = cplendf - cplbegf;
 			ncplbnd = ncplsubnd;
 			for (bnd = 1; bnd < ncplsubnd; bnd++) {
-				ncplbnd += copy(a, 1); // ncplbnd
+				ncplbnd += copy(a, 1, "ncplbnd");
 			}
 		}
 	}
 	if (cplinu) {
 		for (ch = 0; ch < nfchans; ch++) {
 			if (chincpl & (1<<ch)) {
-				cplcoe[ch] = copy(a, 1); // cplcoe[ch]
+				cplcoe[ch] = copy(a, 1, "cplcoe[ch]");
 				if (cplcoe[ch]) {
-					copy(a, 2); // mstrcplco[ch]
+					copy(a, 2, "mstrcplco[ch]");
 					for (bnd = 0; bnd < ncplbnd; bnd++) {
-						copy(a, 4); // cplcoexp[ch][bnd]
-						copy(a, 4); // cplcomant[ch][bnd]
+						copy(a, 4, "cplcoexp[ch][bnd]");
+						copy(a, 4, "cplcomant[ch][bnd]");
 					}
 				}
 			}
 		}
 		if (a->acmod == 2 && phsflginu && (cplcoe[0] || cplcoe[1])) {
-			copy(a, ncplbnd); // phsflg
+			copy(a, ncplbnd, "phsflg");
 		}
 	}
 	if (a->acmod == 2) {
-		if (copy(a, 1)) { // rematstr
+		if (copy(a, 1, "rematstr")) {
 			if (cplbegf == 0 && cplinu) {
-				copy(a, 2); // rematflg
+				copy(a, 2, "rematflg");
 			} else if (cplbegf <= 2 && cplinu) {
-				copy(a, 3); // rematflg
+				copy(a, 3, "rematflg");
 			} else {
-				copy(a, 4); // rematflg
+				copy(a, 4, "rematflg");
 			}
 		}
 	}
@@ -389,13 +394,13 @@ audblk(struct ac3 *a)
 	cplexpstr = 0;
 	lfeexpstr = 0;
 	if (cplinu) {
-		cplexpstr = copy(a, 2); // cplexpstr
+		cplexpstr = copy(a, 2, "cplexpstr");
 	}
 	for (ch = 0; ch < nfchans; ch++) {
-		chexpstr[ch] = copy(a, 2); // chexpstr[ch]
+		chexpstr[ch] = copy(a, 2, "chexpstr[ch]");
 	}
 	if (a->lfeon) {
-		lfeexpstr = copy(a, 1); // lfeexpstr
+		lfeexpstr = copy(a, 1, "lfeexpstr");
 	}
 	for (ch = 0; ch < nfchans; ch++) {
 		strtmant[ch] = 0;
@@ -404,7 +409,7 @@ audblk(struct ac3 *a)
 			if (chincpl & (1<<ch)) {
 				endmant[ch] = cplstrtmant;
 			} else {
-				chbwcod[ch] = copy(a, 6); // chbwcod[ch]
+				chbwcod[ch] = copy(a, 6, "chbwcod[ch]");
 				endmant[ch] = 37 + 3*(chbwcod[ch] + 12);
 			}
 		}
@@ -412,27 +417,27 @@ audblk(struct ac3 *a)
 	if (cplinu) {
 		if (cplexpstr != 0) {
 			ncplgrps = (cplendmant - cplstrtmant) / expgrptab[cplexpstr];
-			copy(a, 4); // cplabsexp
+			copy(a, 4, "cplabsexp");
 			for (grp = 0; grp < ncplgrps; grp++) {
-				copy(a, 7); // cplexps
+				copy(a, 7, "cplexps");
 			}
 		}
 	}
 	for (ch = 0; ch < nfchans; ch++) {
 		if (chexpstr[ch] != 0) {
-			copy(a, 4); // exps[ch][0]
+			copy(a, 4, "exps[ch][0]");
 			tmp = chexpstr[ch];
 			nchgrps = (chbwcod[ch]*3 + 72 + expgrptab[tmp]-3) / expgrptab[tmp];
 			for (grp = 0; grp < nchgrps; grp++) {
-				copy(a, 7); // exps[ch][grp]
+				copy(a, 7, "exps[ch][grp]");
 			}
 		}
 	}
 	if (a->lfeon) {
 		if (lfeexpstr != 0) {
-			copy(a, 4); // lfeexps[0]
-			copy(a, 7); // lfeexps[1]
-			copy(a, 7); // lfeexps[2]
+			copy(a, 4, "lfeexps[0]");
+			copy(a, 7, "lfeexps[1]");
+			copy(a, 7, "lfeexps[2]");
 		}
 	}
 
@@ -443,12 +448,12 @@ audblk(struct ac3 *a)
 	int cpldeltbae;
 	int sdecay, fdecay, sgain, dbknee, floor;
 	cpldeltbae = 0;
-	if (copy(a, 1)) { // baie
-		sdecay = sdecaytab[copy(a, 2)]; // sdcycod
-		fdecay = fdecaytab[copy(a, 2)]; // fdcycod
-		sgain = sgaintab[copy(a, 2)]; // sgaincod
-		dbknee = dbkneetab[copy(a, 2)]; // dbpbcod
-		floor = floortab[copy(a, 2)]; // floorcod
+	if (copy(a, 1, "baie")) {
+		sdecay = sdecaytab[copy(a, 2, "sdcycod")];
+		fdecay = fdecaytab[copy(a, 2, "fdcycod")];
+		sgain = sgaintab[copy(a, 2, "sgaincod")];
+		dbknee = dbkneetab[copy(a, 2, "dbpbcod")];
+		floor = floortab[copy(a, 2, "floorcod")];
 	} else {
 		sdecay = sdecaytab[2];
 		fdecay = fdecaytab[1];
@@ -456,51 +461,51 @@ audblk(struct ac3 *a)
 		dbknee = dbkneetab[2];
 		floor = floortab[7];
 	}
-	if (copy(a, 1)) { // snroffste
-		csnroffst = copy(a, 6); // csnroffst
+	if (copy(a, 1, "snroffste")) {
+		csnroffst = copy(a, 6, "csnroffst");
 		if (cplinu) {
-			cplba.fsnroffst = copy(a, 4); // cplfsnroffst
-			cplba.fgain = fgaintab[copy(a, 3)]; // cplfgaincod
+			cplba.fsnroffst = copy(a, 4, "cplfsnroffst");
+			cplba.fgain = fgaintab[copy(a, 3, "cplfgaincod")];
 		}
 		for (ch = 0; ch < nfchans; ch++) {
-			ba[ch].fsnroffst = copy(a, 4); // fsnroffst
-			ba[ch].fgain = fgaintab[copy(a, 3)]; // fgaincod
+			ba[ch].fsnroffst = copy(a, 4, "fsnroffst");
+			ba[ch].fgain = fgaintab[copy(a, 3, "fgaincod")];
 		}
 		if (a->lfeon) {
-			lfeba.fsnroffst = copy(a, 4); // lfefsnroffst
-			lfeba.fgain = fgaintab[copy(a, 3)]; // lfefgaincod
+			lfeba.fsnroffst = copy(a, 4, "lfefsnroffst");
+			lfeba.fgain = fgaintab[copy(a, 3, "lfefgaincod")];
 		}
 	}
 	if (cplinu) {
-		if (copy(a, 1)) { // cplleake
-			cplba.fleak = copy(a, 3); // cplfleak
-			cplba.sleak = copy(a, 3); // cplsleak
+		if (copy(a, 1, "cplleake")) {
+			cplba.fleak = copy(a, 3, "cplfleak");
+			cplba.sleak = copy(a, 3, "cplsleak");
 		}
 	}
-	if (copy(a, 1)) { // deltbaie
+	if (copy(a, 1, "deltbaie")) {
 		if (cplinu) {
-			cpldeltbae = copy(a, 2); // cpldeltdae
+			cpldeltbae = copy(a, 2, "cpldeltdae");
 		}
 		for (ch = 0; ch < nfchans; ch++) {
-			ba[ch].deltbae = copy(a, 2); // deltdae[ch]
+			ba[ch].deltbae = copy(a, 2, "deltdae[ch]");
 		}
 		if (cplinu) {
 			if (cpldeltbae == 1) {
-				cplba.deltnseg = copy(a, 3); // deltnseg
+				cplba.deltnseg = copy(a, 3, "deltnseg");
 				for (seg = 0; seg < cplba.deltnseg; seg++) {
-					cplba.deltoffst[seg] = copy(a, 5); // deltoffst
-					cplba.deltlen[seg] = copy(a, 4); // deltlen
-					cplba.deltba[seg] = copy(a, 3); // deltba
+					cplba.deltoffst[seg] = copy(a, 5, "deltoffst");
+					cplba.deltlen[seg] = copy(a, 4, "deltlen");
+					cplba.deltba[seg] = copy(a, 3, "deltba");
 				}
 			}
 		}
 		for (ch = 0; ch < nfchans; ch++) {
 			if (ba[ch].deltbae == 1) {
-				ba[ch].deltnseg = copy(a, 3); // deltnseg
+				ba[ch].deltnseg = copy(a, 3, "deltnseg");
 				for (seg = 0; seg < ba[ch].deltnseg; seg++) {
-					ba[ch].deltoffst[seg] = copy(a, 5); // deltoffst
-					ba[ch].deltlen[seg] = copy(a, 4); // deltlen
-					ba[ch].deltba[seg] = copy(a, 3); // deltba
+					ba[ch].deltoffst[seg] = copy(a, 5, "deltoffst");
+					ba[ch].deltlen[seg] = copy(a, 4, "deltlen");
+					ba[ch].deltba[seg] = copy(a, 3, "deltba");
 				}
 			}
 		}
@@ -521,10 +526,10 @@ audblk(struct ac3 *a)
 	// Skip bytes
 	//
 	int skipl;
-	if (copy(a, 1)) { // skiple
-		skipl = copy(a, 9); // skipl
+	if (copy(a, 1, "skiple")) {
+		skipl = copy(a, 9, "skipl");
 		for (i = 0; i < skipl; i++) {
-			copy(a, 8);
+			copy(a, 8, "");
 		}
 	}
 
@@ -568,7 +573,7 @@ static int copymant(struct ac3 *a, int bap)
 		if (a->b1) {
 			a->b1--;
 		} else {
-			bits = copy(a, 5);
+			bits = copy(a, 5, "");
 			a->b1 = 2;
 		}
 		break;
@@ -576,30 +581,30 @@ static int copymant(struct ac3 *a, int bap)
 		if (a->b2) {
 			a->b2--;
 		} else {
-			bits = copy(a, 7);
+			bits = copy(a, 7, "");
 			a->b2 = 2;
 		}
 		break;
 	case 3:
-		bits = copy(a, 3);
+		bits = copy(a, 3, "");
 		break;
 	case 4:
 		if (a->b4) {
 			a->b4 = 0;
 		} else {
-			bits = copy(a, 7);
+			bits = copy(a, 7, "");
 			a->b4 = 1;
 		}
 		break;
 	case 5:
-		bits = copy(a, 4);
+		bits = copy(a, 4, "");
 		break;
 	default: // 6-15
 		if (bap > 15) {
 			// invalid
 			bap = 15;
 		}
-		bits = copy(a, quantization_tab[bap]);
+		bits = copy(a, quantization_tab[bap], "");
 		break;
 	}
 	return bits;
