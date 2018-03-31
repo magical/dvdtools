@@ -118,13 +118,18 @@ struct ac3 {
 	int frmsizecod; // frame size code
 	int cplinu; // channel coupling in use flag
 
-	int bap[256]; // bit allocation
+	int bap[5][256]; // bit allocation
+	int cplbap[256];
+	int lfebap[256];
+
+	int b1, b2, b4; // mantissa blocks
 };
 
 int ac3(struct bitwriter*, struct bitreader*);
 static int copy(struct ac3* a, int n);
 static int syncframe(struct ac3*);
 static void audblk(struct ac3*);
+static int copymant(struct ac3 *a, int bap);
 
 static int nfchanstab[] = {2, 1, 2, 3, 3, 4, 4, 5};
 static int expgrptab[] = {0, 3, 6, 12};
@@ -155,6 +160,12 @@ static int floortab[] = {
  // fgaintab[i] = (i+1) * 0x80
 static int fgaintab[] = {
 	0x080, 0x100, 0x180, 0x200, 0x280, 0x300, 0x380, 0x400
+};
+
+// 7.18
+static int quantization_tab[16] = {
+	0, 3, 5, 7, 11, 15, /* symmetric */
+	5, 6, 7, 8, 9, 10, 11, 12, 14, 16, /* asymmetric */
 };
 
 // Copy and return n bits from a->br to a->bw.
@@ -287,7 +298,7 @@ syncframe(struct ac3 *a)
 static void
 audblk(struct ac3 *a)
 {
-	int i, ch, bin, seg;
+	int i, ch, freq, seg;
 	int nfchans;
 
 	nfchans = nfchanstab[a->acmod];
@@ -308,7 +319,7 @@ audblk(struct ac3 *a)
 	// Coupling
 	//
 	int cplinu, chincpl, cplcoe[5];
-	int cplbegf, cplendf, cplbegmant, cplendmant;
+	int cplbegf, cplendf, cplstrtmant, cplendmant;
 	int bnd, ncplsubnd, ncplbnd;
 	int phsflginu;
 	cplinu = 0;
@@ -327,7 +338,7 @@ audblk(struct ac3 *a)
 			}
 			cplbegf = copy(a, 4); // cplbegf
 			cplendf = copy(a, 4) + 3; // cplendf
-			cplbegmant = cplbegf*12 + 37;
+			cplstrtmant = cplbegf*12 + 37;
 			cplendmant = cplendf*12 + 37;
 			ncplsubnd = cplendf - cplbegf;
 			ncplbnd = ncplsubnd;
@@ -367,6 +378,7 @@ audblk(struct ac3 *a)
 
 	// Exponents
 	//
+	int strtmant[5], endmant[5] = {0};
 	int cplexpstr, chexpstr[5], lfeexpstr;
 	int chbwcod[5];
 	int grp, ncplgrps, nchgrps;
@@ -383,13 +395,20 @@ audblk(struct ac3 *a)
 		lfeexpstr = copy(a, 1); // lfeexpstr
 	}
 	for (ch = 0; ch < nfchans; ch++) {
-		if (chexpstr[ch] != 0 && !(chincpl & (1<<ch))) {
-			chbwcod[ch] = copy(a, 6); // chbwcod[ch]
+		strtmant[ch] = 0;
+
+		if (chexpstr[ch] != 0) {
+			if (chincpl & (1<<ch)) {
+				endmant[ch] = cplstrtmant;
+			} else {
+				chbwcod[ch] = copy(a, 6); // chbwcod[ch]
+				endmant[ch] = 37 + 3*(chbwcod[ch] + 12);
+			}
 		}
 	}
 	if (cplinu) {
 		if (cplexpstr != 0) {
-			ncplgrps = (cplendmant - cplbegmant) / expgrptab[cplexpstr];
+			ncplgrps = (cplendmant - cplstrtmant) / expgrptab[cplexpstr];
 			copy(a, 4); // cplabsexp
 			for (grp = 0; grp < ncplgrps; grp++) {
 				copy(a, 7); // cplexps
@@ -416,7 +435,8 @@ audblk(struct ac3 *a)
 
 	// Bit allocation
 	//
-	struct balloc cplba, ba[5];
+	struct balloc ba[5], cplba = {0}, lfeba = {0};
+	int csnroffst = 0;
 	int cpldeltbae;
 	int sdecay, fdecay, sgain, dbknee, floor;
 	cpldeltbae = 0;
@@ -428,7 +448,7 @@ audblk(struct ac3 *a)
 		floor = floortab[copy(a, 2)]; // floorcod
 	}
 	if (copy(a, 1)) { // snroffste
-		copy(a, 6); // csnroffst
+		csnroffst = copy(a, 6); // csnroffst
 		if (cplinu) {
 			cplba.fsnroffst = copy(a, 4); // cplfsnroffst
 			cplba.fgain = fgaintab[copy(a, 3)]; // cplfgaincod
@@ -438,8 +458,8 @@ audblk(struct ac3 *a)
 			ba[ch].fgain = fgaintab[copy(a, 3)]; // fgaincod
 		}
 		if (a->lfeon) {
-			copy(a, 4); // lfefsnroffst
-			copy(a, 3); // lfefgaincod
+			lfeba.fsnroffst = copy(a, 4); // lfefsnroffst
+			lfeba.fgain = fgaintab[copy(a, 3)]; // lfefgaincod
 		}
 	}
 	if (cplinu) {
@@ -477,22 +497,17 @@ audblk(struct ac3 *a)
 		}
 	}
 
-	int strtmant, endmant;
+	// 7.2.2.1
 	for (ch = 0; ch < nfchans; ch++) {
-		strtmant = 0;
-		if ((chincpl & 1<<ch)) {
-			endmant = 37 + 12*cplbegf;
-		} else {
-			endmant = 37 + 3*(chbwcod[ch] + 12);
-		}
-		bit_allocation(a->bap, &ba[ch], a->fscod, strtmant, endmant, sdecay, fdecay, sgain, dbknee, floor);
+		bit_allocation(a->bap[ch], &ba[ch], a->fscod, strtmant[ch], endmant[ch], csnroffst, sdecay, fdecay, sgain, dbknee, floor);
 	}
 
 	if (cplinu) {
-		strtmant = 37 + 12*cplbegf;
-		endmant = 37 + 12*(cplendf+3);
-		bit_allocation(a->bap, &ba[ch], a->fscod, strtmant, endmant, sdecay, fdecay, sgain, dbknee, floor);
+		bit_allocation(a->cplbap, &cplba, a->fscod, cplstrtmant, cplendmant, csnroffst, sdecay, fdecay, sgain, dbknee, floor);
 	}
+	int lfestrtmant = 0;
+	int lfeendmant = 7;
+	bit_allocation(a->lfebap, &lfeba, a->fscod, lfestrtmant, lfeendmant, csnroffst, sdecay, fdecay, sgain, dbknee, floor);
 
 	// Skip bytes
 	//
@@ -508,27 +523,77 @@ audblk(struct ac3 *a)
 	//
 	// nchmant[ch] from chbwcod[ch] or cplbegf
 	//
-	int nchmant[5];
-	int ncplmant;
+	//int nchmant[5];
+	//int ncplmant;
 	int got_cplchan;
 	got_cplchan = 0;
+	a->b1 = 0;
+	a->b2 = 0;
+	a->b4 = 0;
 	for (ch = 0; ch < nfchans; ch++) {
-		for (bin = 0; bin < nchmant[ch]; bin++) {
-			copy(a, x); // chmant[ch][bin]
-			if (cplinu && (chincpl & (1<<ch)) && !got_cplchan) {
-				ncplmant = 12 * ncplsubnd;
-				for (bin = 0; bin < ncplmant; bin++) {
-					// cplmant[bin]
-				}
-				got_cplchan = 1;
+		for (freq = strtmant[ch]; freq < endmant[ch]; freq++) {
+			copymant(a, a->bap[ch][freq]); // chmant[ch][bin]
+		}
+		if (cplinu && (chincpl & (1<<ch)) && !got_cplchan) {
+			for (freq = cplstrtmant; freq < cplendmant; freq++) {
+				copymant(a, a->cplbap[freq]); // cplmant[bin]
 			}
+			got_cplchan = 1;
 		}
 	}
 	if (a->lfeon) {
-		for (bin = 0; bin < 7; bin++) {
-			copy(a, x); // lfemant[bin]
+		for (freq = lfestrtmant; freq < lfeendmant; freq++) {
+			copymant(a, a->lfebap[freq]); // lfemant[bin]
 		}
 	}
+}
+
+static int copymant(struct ac3 *a, int bap)
+{
+	int bits = 0;
+	switch (bap) {
+	case 0:
+		// random noise
+		break;
+	case 1:
+		if (a->b1) {
+			a->b1--;
+		} else {
+			bits = copy(a, 5);
+			a->b1 = 2;
+		}
+		break;
+	case 2:
+		if (a->b2) {
+			a->b2--;
+		} else {
+			bits = copy(a, 7);
+			a->b2 = 2;
+		}
+		break;
+	case 3:
+		bits = copy(a, 3);
+		break;
+	case 4:
+		if (a->b4) {
+			a->b4 = 0;
+		} else {
+			bits = copy(a, 7);
+			a->b4 = 1;
+		}
+		break;
+	case 5:
+		bits = copy(a, 4);
+		break;
+	default: // 6-15
+		if (bap > 15) {
+			// invalid
+			bap = 15;
+		}
+		bits = copy(a, quantization_tab[bap]);
+		break;
+	}
+	return bits;
 }
 
 int main()

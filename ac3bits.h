@@ -11,5 +11,6 @@ int bit_allocation(
 	int *bapout,
 	struct balloc *ba, int fscod,
 	int start, int end,
+	int csnroffst,
 	int sdecay, int fdecay, int sgain, int dbknee, int floor
 );

@@ -57,6 +57,7 @@ bit_allocation(
 	int *bapout,
 	struct balloc *ba, int fscod,
 	int start, int end,
+	int csnroffst,
 	int sdecay, int fdecay, int sgain, int dbknee, int floor
 ) {
 	int psd[256], bndpsd[50], mask[50], bap[256];
@@ -67,6 +68,8 @@ bit_allocation(
 
 	int i, band, bin, seg;
 	int lastbin;
+
+	int snroffset = (((csnroffst - 15) << 4) - ba->fsnroffst) << 2;
 
 	// Exponent mapping into power-spectral density. 7.2.2.2
 	for (bin = start; bin < end; bin++) {
@@ -157,7 +160,7 @@ bit_allocation(
 	band = masktab[start];
 	do {
 		lastbin = min(bndtab[band] + bndsz[band], end);
-		mask[band] -= ba->fsnroffst;
+		mask[band] -= snroffset;
 		mask[band] -= floor;
 		if (mask[band] < 0) {
 			mask[band] = 0;
