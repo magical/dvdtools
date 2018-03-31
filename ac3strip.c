@@ -57,6 +57,7 @@ readbits(struct bitreader *br, int n)
 	}
 	ret = br->res >> (br->n - n);
 	ret &= ((uint64_t)1 << n) - (uint64_t)1;
+	br->n -= n;
 	return ret;
 }
 
@@ -136,17 +137,17 @@ static int copymant(struct ac3 *a, int bap);
 static int nfchanstab[] = {2, 1, 2, 3, 3, 4, 4, 5};
 static int expgrptab[] = {0, 3, 6, 12};
 static int frmsizetab[3][38] = {{
-	96, 96, 120, 120, 144, 144, 168, 168, 192, 192, 240, 240, 288, 288,
-	336, 336, 384, 384, 480, 480, 576, 576, 672, 672, 768, 768, 960, 960,
-	1152, 1152, 1344, 1344, 1536, 1536, 1728, 1728, 1920, 1920,
+	64, 64, 80, 80, 96, 96, 112, 112, 128, 128, 160, 160, 192, 192, 224,
+	224, 256, 256, 320, 320, 384, 384, 448, 448, 512, 512, 640, 640, 768,
+	768, 896, 896, 1024, 1024, 1152, 1152, 1280, 1280,
 }, {
 	69, 70, 87, 88, 104, 105, 121, 122, 139, 140, 174, 175, 208, 209, 243,
 	244, 278, 279, 348, 349, 417, 418, 487, 488, 557, 558, 696, 697, 835,
 	836, 975, 976, 1114, 1115, 1253, 1254, 1393, 1394,
 }, {
-	64, 64, 80, 80, 96, 96, 112, 112, 128, 128, 160, 160, 192, 192, 224,
-	224, 256, 256, 320, 320, 384, 384, 448, 448, 512, 512, 640, 640, 768,
-	768, 896, 896, 1024, 1024, 1152, 1152, 1280, 1280,
+	96, 96, 120, 120, 144, 144, 168, 168, 192, 192, 240, 240, 288, 288,
+	336, 336, 384, 384, 480, 480, 576, 576, 672, 672, 768, 768, 960, 960,
+	1152, 1152, 1344, 1344, 1536, 1536, 1728, 1728, 1920, 1920,
 }};
 
 static int sdecaytab[] = {0x0F, 0x11, 0x13, 0x15};
@@ -340,7 +341,9 @@ audblk(struct ac3 *a)
 	if (copy(a, 1, "cplstre")) {
 		cplinu = copy(a, 1, "cplinu");
 		if (cplinu) {
-			chincpl = copy(a, nfchans, "chincpl");
+			for (ch = 0; ch < nfchans; ch++) {
+				chincpl |= copy(a, 1, "chincpl[ch]")<<ch;
+			}
 			if (a->acmod == 2) {
 				phsflginu = copy(a, 1, "phsflginu");
 			}
@@ -351,7 +354,7 @@ audblk(struct ac3 *a)
 			ncplsubnd = cplendf - cplbegf;
 			ncplbnd = ncplsubnd;
 			for (bnd = 1; bnd < ncplsubnd; bnd++) {
-				ncplbnd += copy(a, 1, "ncplbnd");
+				ncplbnd -= copy(a, 1, "cplbndstrc[bnd]");
 			}
 		}
 	}
@@ -426,8 +429,8 @@ audblk(struct ac3 *a)
 	for (ch = 0; ch < nfchans; ch++) {
 		if (chexpstr[ch] != 0) {
 			copy(a, 4, "exps[ch][0]");
-			tmp = chexpstr[ch];
-			nchgrps = (chbwcod[ch]*3 + 72 + expgrptab[tmp]-3) / expgrptab[tmp];
+			tmp = expgrptab[chexpstr[ch]];
+			nchgrps = (endmant[ch] - 1 + (tmp-3)) / tmp;
 			for (grp = 0; grp < nchgrps; grp++) {
 				copy(a, 7, "exps[ch][grp]");
 			}
