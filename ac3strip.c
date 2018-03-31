@@ -449,6 +449,12 @@ audblk(struct ac3 *a)
 		sgain = sgaintab[copy(a, 2)]; // sgaincod
 		dbknee = dbkneetab[copy(a, 2)]; // dbpbcod
 		floor = floortab[copy(a, 2)]; // floorcod
+	} else {
+		sdecay = sdecaytab[2];
+		fdecay = fdecaytab[1];
+		sgain = sgaintab[1];
+		dbknee = dbkneetab[2];
+		floor = floortab[7];
 	}
 	if (copy(a, 1)) { // snroffste
 		csnroffst = copy(a, 6); // csnroffst
