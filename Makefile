@@ -16,7 +16,7 @@ dvdbreakpoints: dvdbreakpoints.c bitreader.c bitreader.h uint.h Makefile
 extractaudio: extractaudio.c bitreader.c bitreader.h uint.h Makefile
 	$(CC) $(CFLAGS) -o $@ $< bitreader.c -ldvdread
 ac3strip: ac3strip.c ac3bits.c ac3tab.c ac3bits.h Makefile
-	$(CC) $(CFLAGS) -o $@ ac3strip.c ac3bits.c
+	$(CC) $(CFLAGS) -ggdb -fsanitize=address -o $@ ac3strip.c ac3bits.c
 
 bitreader_test: bitreader_test.c bitreader.c bitreader.h uint.h Makefile
 	$(CC) $(CFLAGS) -o bitreader_test bitreader_test.c bitreader.c
