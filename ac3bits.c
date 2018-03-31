@@ -1,6 +1,7 @@
 /* ac3bits - bit allocation calculations for A/52 */
 #include "ac3bits.h"
 #include "ac3tab.c"
+#include <assert.h>
 
 int abs(int);
 
@@ -87,6 +88,8 @@ bit_allocation(
 		}
 		band++;
 	} while (lastbin < end);
+
+	assert(end > 0);
 
 	// Excitation function. 7.2.2.4
 	int bndstrt, bndend, begin;

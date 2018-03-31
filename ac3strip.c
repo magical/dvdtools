@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <errno.h>
+#include <assert.h>
 #include "ac3bits.h"
 //#include "bitreader.h"
 
@@ -218,6 +219,8 @@ syncframe(struct ac3 *a)
 	copy(a, 16, "crc1");
 	a->fscod      = copy(a, 2, "fscod");
 	a->frmsizecod = copy(a, 6, "frmsizecod");
+	assert(a->fscod <= 2);
+	assert(a->frmsizecod <= 36);
 
 	// We'll come back later to fix the CRC.
 
