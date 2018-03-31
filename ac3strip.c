@@ -120,11 +120,18 @@ struct ac3 {
 	int lfeon; // LFE channel present
 	int fscod; // frequency code. 0=48kHz; 1=44.1kHz; 2=32kHz
 	int frmsizecod; // frame size code
+
+	// channel coupling
 	int cplinu; // channel coupling in use flag
+	int chincpl;
+	int cplbegf, cplendf;
+	int ncplbnd;
+	int phsflginu;
 
 	int bap[5][256]; // bit allocation
 	int cplbap[256];
 	int lfebap[256];
+
 
 	int b1, b2, b4; // mantissa blocks
 };
@@ -280,6 +287,13 @@ syncframe(struct ac3 *a)
 
 	// Audio blocks
 	//
+	// reset coupling parameters
+	a->cplinu = 0;
+	a->chincpl = 0;
+	a->cplbegf = 0;
+	a->cplendf = 0;
+	a->ncplbnd = 0;
+	a->phsflginu = 0;
 	for (blk = 0; blk < 6; blk++) {
 		audblk(a);
 	}
@@ -330,59 +344,52 @@ audblk(struct ac3 *a)
 
 	// Coupling
 	//
-	int cplinu, chincpl, cplcoe[5];
-	int cplbegf, cplendf, cplstrtmant, cplendmant;
-	int bnd, ncplsubnd, ncplbnd;
-	int phsflginu;
-	cplinu = 0;
-	chincpl = 0;
-	cplbegf = 0;
-	cplendf = 0;
-	ncplbnd = 0;
-	ncplsubnd = 0;
-	phsflginu = 0;
+	int bnd;
+	int cplcoe[5];
+	int ncplsubnd;
+	int cplstrtmant, cplendmant;
 	if (copy(a, 1, "cplstre")) {
-		cplinu = copy(a, 1, "cplinu");
-		if (cplinu) {
+		a->cplinu = copy(a, 1, "cplinu");
+		if (a->cplinu) {
 			for (ch = 0; ch < nfchans; ch++) {
-				chincpl |= copy(a, 1, "chincpl[ch]")<<ch;
+				a->chincpl |= copy(a, 1, "chincpl[ch]")<<ch;
 			}
 			if (a->acmod == 2) {
-				phsflginu = copy(a, 1, "phsflginu");
+				a->phsflginu = copy(a, 1, "phsflginu");
 			}
-			cplbegf = copy(a, 4, "cplbegf");
-			cplendf = copy(a, 4, "cplendf") + 3;
-			cplstrtmant = cplbegf*12 + 37;
-			cplendmant = cplendf*12 + 37;
-			ncplsubnd = cplendf - cplbegf;
-			ncplbnd = ncplsubnd;
+			a->cplbegf = copy(a, 4, "cplbegf");
+			a->cplendf = copy(a, 4, "cplendf") + 3;
+			ncplsubnd = a->cplendf - a->cplbegf;
+			a->ncplbnd = ncplsubnd;
 			for (bnd = 1; bnd < ncplsubnd; bnd++) {
-				ncplbnd -= copy(a, 1, "cplbndstrc[bnd]");
+				a->ncplbnd -= copy(a, 1, "cplbndstrc[bnd]");
 			}
 		}
 	}
-	if (cplinu) {
+	cplstrtmant = a->cplbegf*12 + 37;
+	cplendmant = a->cplendf*12 + 37;
+	if (a->cplinu) {
 		for (ch = 0; ch < nfchans; ch++) {
-			if (chincpl & (1<<ch)) {
+			if (a->chincpl & (1<<ch)) {
 				cplcoe[ch] = copy(a, 1, "cplcoe[ch]");
 				if (cplcoe[ch]) {
 					copy(a, 2, "mstrcplco[ch]");
-					for (bnd = 0; bnd < ncplbnd; bnd++) {
+					for (bnd = 0; bnd < a->ncplbnd; bnd++) {
 						copy(a, 4, "cplcoexp[ch][bnd]");
 						copy(a, 4, "cplcomant[ch][bnd]");
 					}
 				}
 			}
 		}
-		if (a->acmod == 2 && phsflginu && (cplcoe[0] || cplcoe[1])) {
-			copy(a, ncplbnd, "phsflg");
+		if (a->acmod == 2 && a->phsflginu && (cplcoe[0] || cplcoe[1])) {
+			copy(a, a->ncplbnd, "phsflg");
 		}
 	}
 	if (a->acmod == 2) {
 		if (copy(a, 1, "rematstr")) {
-			if (cplbegf == 0 && cplinu) {
+			if (a->cplbegf == 0 && a->cplinu) {
 				copy(a, 2, "rematflg");
-			} else if (cplbegf <= 2 && cplinu) {
+			} else if (a->cplbegf <= 2 && a->cplinu) {
 				copy(a, 3, "rematflg");
 			} else {
 				copy(a, 4, "rematflg");
@@ -399,7 +406,7 @@ audblk(struct ac3 *a)
 	int tmp;
 	cplexpstr = 0;
 	lfeexpstr = 0;
-	if (cplinu) {
+	if (a->cplinu) {
 		cplexpstr = copy(a, 2, "cplexpstr");
 	}
 	for (ch = 0; ch < nfchans; ch++) {
@@ -412,7 +419,7 @@ audblk(struct ac3 *a)
 		strtmant[ch] = 0;
 
 		if (chexpstr[ch] != 0) {
-			if (chincpl & (1<<ch)) {
+			if (a->chincpl & (1<<ch)) {
 				endmant[ch] = cplstrtmant;
 			} else {
 				chbwcod[ch] = copy(a, 6, "chbwcod[ch]");
@@ -420,7 +427,7 @@ audblk(struct ac3 *a)
 			}
 		}
 	}
-	if (cplinu) {
+	if (a->cplinu) {
 		if (cplexpstr != 0) {
 			ncplgrps = (cplendmant - cplstrtmant) / expgrptab[cplexpstr];
 			copy(a, 4, "cplabsexp");
@@ -469,7 +476,7 @@ audblk(struct ac3 *a)
 	}
 	if (copy(a, 1, "snroffste")) {
 		csnroffst = copy(a, 6, "csnroffst");
-		if (cplinu) {
+		if (a->cplinu) {
 			cplba.fsnroffst = copy(a, 4, "cplfsnroffst");
 			cplba.fgain = fgaintab[copy(a, 3, "cplfgaincod")];
 		}
@@ -482,20 +489,20 @@ audblk(struct ac3 *a)
 			lfeba.fgain = fgaintab[copy(a, 3, "lfefgaincod")];
 		}
 	}
-	if (cplinu) {
+	if (a->cplinu) {
 		if (copy(a, 1, "cplleake")) {
 			cplba.fleak = copy(a, 3, "cplfleak");
 			cplba.sleak = copy(a, 3, "cplsleak");
 		}
 	}
 	if (copy(a, 1, "deltbaie")) {
-		if (cplinu) {
+		if (a->cplinu) {
 			cpldeltbae = copy(a, 2, "cpldeltdae");
 		}
 		for (ch = 0; ch < nfchans; ch++) {
 			ba[ch].deltbae = copy(a, 2, "deltdae[ch]");
 		}
-		if (cplinu) {
+		if (a->cplinu) {
 			if (cpldeltbae == 1) {
 				cplba.deltnseg = copy(a, 3, "deltnseg");
 				for (seg = 0; seg < cplba.deltnseg; seg++) {
@@ -522,7 +529,7 @@ audblk(struct ac3 *a)
 		bit_allocation(a->bap[ch], &ba[ch], a->fscod, strtmant[ch], endmant[ch], csnroffst, sdecay, fdecay, sgain, dbknee, floor);
 	}
 
-	if (cplinu) {
+	if (a->cplinu) {
 		bit_allocation(a->cplbap, &cplba, a->fscod, cplstrtmant, cplendmant, csnroffst, sdecay, fdecay, sgain, dbknee, floor);
 	}
 	int lfestrtmant = 0;
@@ -554,7 +561,7 @@ audblk(struct ac3 *a)
 		for (freq = strtmant[ch]; freq < endmant[ch]; freq++) {
 			copymant(a, a->bap[ch][freq]); // chmant[ch][bin]
 		}
-		if (cplinu && (chincpl & (1<<ch)) && !got_cplchan) {
+		if (a->cplinu && (a->chincpl & (1<<ch)) && !got_cplchan) {
 			for (freq = cplstrtmant; freq < cplendmant; freq++) {
 				copymant(a, a->cplbap[freq]); // cplmant[bin]
 			}
