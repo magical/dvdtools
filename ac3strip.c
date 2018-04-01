@@ -132,6 +132,9 @@ struct ac3 {
 	int cplbap[256];
 	int lfebap[256];
 
+	int exp[5][256];
+	int cplexp[256];
+	int lfeexp[256];
 
 	int b1, b2, b4; // mantissa blocks
 };
@@ -178,6 +181,8 @@ static int quantization_tab[16] = {
 	0, 3, 5, 7, 11, 15, /* symmetric */
 	5, 6, 7, 8, 9, 10, 11, 12, 14, 16, /* asymmetric */
 };
+
+static int grpsizetab[4] = {0, 1, 2, 4};
 
 // Copy and return n bits from a->br to a->bw.
 int
@@ -427,30 +432,41 @@ audblk(struct ac3 *a)
 			}
 		}
 	}
+	int dexp[256];
+	int grpsize;
+	int absexp;
 	if (a->cplinu) {
 		if (cplexpstr != 0) {
 			ncplgrps = (cplendmant - cplstrtmant) / expgrptab[cplexpstr];
-			copy(a, 4, "cplabsexp");
+			absexp = copy(a, 4, "cplabsexp") << 1;
 			for (grp = 0; grp < ncplgrps; grp++) {
-				copy(a, 7, "cplexps");
+				dexp[grp] = copy(a, 7, "cplexps");
 			}
+			grpsize = grpsizetab[cplexpstr];
+			decode_exponents(&a->cplexp[cplstrtmant-1], dexp, ncplgrps, absexp, grpsize);
+			// XXX this sets exp[0] = absexp
 		}
 	}
 	for (ch = 0; ch < nfchans; ch++) {
 		if (chexpstr[ch] != 0) {
-			copy(a, 4, "exps[ch][0]");
+			absexp = copy(a, 4, "exps[ch][0]");
 			tmp = expgrptab[chexpstr[ch]];
 			nchgrps = (endmant[ch] - 1 + (tmp-3)) / tmp;
 			for (grp = 0; grp < nchgrps; grp++) {
-				copy(a, 7, "exps[ch][grp]");
+				dexp[grp] = copy(a, 7, "exps[ch][grp]");
+				// XXX grp+1?
 			}
+			grpsize = grpsizetab[chexpstr[ch]];
+			decode_exponents(a->exp[ch], dexp, nchgrps, absexp, grpsize);
 		}
 	}
 	if (a->lfeon) {
 		if (lfeexpstr != 0) {
-			copy(a, 4, "lfeexps[0]");
-			copy(a, 7, "lfeexps[1]");
-			copy(a, 7, "lfeexps[2]");
+			absexp = copy(a, 4, "lfeexps[0]");
+			dexp[0] = copy(a, 7, "lfeexps[1]");
+			dexp[1] = copy(a, 7, "lfeexps[2]");
+			grpsize = grpsizetab[lfeexpstr];
+			decode_exponents(a->lfeexp, dexp, 2, absexp, grpsize);
 		}
 	}
 
@@ -460,7 +476,18 @@ audblk(struct ac3 *a)
 	int csnroffst = 0;
 	int cpldeltbae;
 	int sdecay, fdecay, sgain, dbknee, floor;
-	cpldeltbae = 0;
+	cpldeltbae = 2;
+	ba[0].deltbae = 2;
+	ba[1].deltbae = 2;
+	ba[2].deltbae = 2;
+	ba[3].deltbae = 2;
+	ba[4].deltbae = 2;
+	cplba.deltnseg = 0; // XXX init at start of frame
+	ba[0].deltnseg = 0;
+	ba[1].deltnseg = 0;
+	ba[2].deltnseg = 0;
+	ba[3].deltnseg = 0;
+	ba[4].deltnseg = 0;
 	if (copy(a, 1, "baie")) {
 		sdecay = sdecaytab[copy(a, 2, "sdcycod")];
 		fdecay = fdecaytab[copy(a, 2, "fdcycod")];
@@ -504,7 +531,7 @@ audblk(struct ac3 *a)
 		}
 		if (a->cplinu) {
 			if (cpldeltbae == 1) {
-				cplba.deltnseg = copy(a, 3, "deltnseg");
+				cplba.deltnseg = copy(a, 3, "deltnseg") + 1;
 				for (seg = 0; seg < cplba.deltnseg; seg++) {
 					cplba.deltoffst[seg] = copy(a, 5, "deltoffst");
 					cplba.deltlen[seg] = copy(a, 4, "deltlen");
@@ -514,7 +541,7 @@ audblk(struct ac3 *a)
 		}
 		for (ch = 0; ch < nfchans; ch++) {
 			if (ba[ch].deltbae == 1) {
-				ba[ch].deltnseg = copy(a, 3, "deltnseg");
+				ba[ch].deltnseg = copy(a, 3, "deltnseg") + 1;
 				for (seg = 0; seg < ba[ch].deltnseg; seg++) {
 					ba[ch].deltoffst[seg] = copy(a, 5, "deltoffst");
 					ba[ch].deltlen[seg] = copy(a, 4, "deltlen");

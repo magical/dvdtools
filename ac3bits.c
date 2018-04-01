@@ -54,9 +54,49 @@ logadd(int a, int b) {
 }
 
 int
+decode_exponents(
+	int *exp,
+	int* gexp, int ngrps, int absexp, int grpsize
+) {
+	int grp;
+	int expacc;
+	int prevexp;
+	int i, j;
+
+	int dexp[256];
+	int aexp[256];
+
+	// Section 7.1.3 exponent decoding
+	for (grp = 0; grp < ngrps; grp++) {
+		expacc = gexp[grp];
+		dexp[grp*3] = expacc / 25;
+		expacc %= 25;
+		dexp[grp*3+1] = expacc / 5;
+		expacc %= 5;
+		dexp[grp*3+2] = expacc;
+	}
+	for (grp = 0; grp < ngrps*3; grp++) {
+		dexp[grp] = dexp[grp]-2;
+	}
+	prevexp = absexp;
+	for (i = 0; i < ngrps*3; i++) {
+		aexp[i] = prevexp + dexp[i];
+		prevexp = aexp[i];
+	}
+	exp[0] = absexp;
+	for (i = 0; i < ngrps*3; i++) {
+		for (j = 0; j < grpsize; j++) {
+			exp[(i*grpsize) + j + 1] = aexp[i];
+		}
+	}
+	return 0;
+}
+
+int
 bit_allocation(
 	int *bapout,
 	struct balloc *ba, int fscod,
+	int *exp,
 	int start, int end,
 	int csnroffst,
 	int sdecay, int fdecay, int sgain, int dbknee, int floor
@@ -74,7 +114,7 @@ bit_allocation(
 
 	// Exponent mapping into power-spectral density. 7.2.2.2
 	for (bin = start; bin < end; bin++) {
-		psd[bin] = (24 - ba->exp[bin]) << 7;
+		psd[bin] = (24 - exp[bin]) << 7;
 	}
 
 	// PSD integration. 7.2.2.3
@@ -148,7 +188,7 @@ bit_allocation(
 	// Delta bit allocation. 7.2.2.6
 	if (ba->deltbae == 0 || ba->deltbae == 1) {
 		band = 0;
-		for (seg = 0; seg < ba->deltnseg+1; seg++) {
+		for (seg = 0; seg < ba->deltnseg; seg++) {
 			band += ba->deltoffst[seg];
 			delta = (ba->deltba[seg] + (ba->deltba[seg] >= 4) - 4) << 7;
 			for (i = 0; i < ba->deltlen[seg]; i++) {
