@@ -1,2 +1,17 @@
-These are programs i wrote to gain familiarity with libdvdread and libdvdcss,
-in preparation for some work on those libraries.
+These are programs i wrote to work with DVDs.
+
+Useful:
+
+- catdvd decrypts dvd-video discs (and dvd-audio if you have a hacked-up libdvdcss)
+
+- extractaudio extracts audio tracks from dvds titles, with correct chapter breaks
+
+Less useful:
+
+- lsdvd lists dvd titles, chapters, and audio tracks
+
+- dvdbreakpoints prints correct chapter breaks for dvd audio tracks
+
+In development:
+
+- ac3strip will eventually strip dynamic range compression from AC-3 files
