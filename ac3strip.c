@@ -72,8 +72,10 @@ writebits(struct bitwriter *bw, uint64_t bits, int n)
 	if (n < 64) {
 		bits &= (1ULL<<n)-1ULL;
 	}
+	assert(n <= 56);
 	bw->res <<= n;
 	bw->res |= bits;
+	bw->n += n;
 	grow(bw, bw->len + bw->n/8);
 	if (bw->err) {
 		return;
@@ -207,10 +209,9 @@ ac3(struct bitwriter *bw, struct bitreader *br)
 	a.br = br;
 	for (;;) {
 		if (syncframe(&a) < 0) {
-			break;
+			return -1;
 		}
 	}
-	return 0;
 }
 
 /* Appologies for the terrible variable names. They're straight from the spec. */
@@ -307,6 +308,7 @@ syncframe(struct ac3 *a)
 	//
 	nauxbits = frmsizetab[a->fscod][a->frmsizecod] * 16;
 	nauxbits -= getnbitsread(a->br);
+	// XXX reset nbitsread at start of frame
 	while (nauxbits >= 16) {
 		copy(a, 16, "");
 		nauxbits -= 16;
@@ -458,6 +460,7 @@ audblk(struct ac3 *a)
 			}
 			grpsize = grpsizetab[chexpstr[ch]];
 			decode_exponents(a->exp[ch], dexp, nchgrps, absexp, grpsize);
+			copy(a, 2, "gainrng[ch]");
 		}
 	}
 	if (a->lfeon) {
@@ -553,15 +556,21 @@ audblk(struct ac3 *a)
 
 	// 7.2.2.1
 	for (ch = 0; ch < nfchans; ch++) {
-		bit_allocation(a->bap[ch], &ba[ch], a->fscod, strtmant[ch], endmant[ch], csnroffst, sdecay, fdecay, sgain, dbknee, floor);
+		if (chexpstr[ch] != 0) {
+			bit_allocation(a->bap[ch], &ba[ch], a->fscod, a->exp[ch], strtmant[ch], endmant[ch], csnroffst, sdecay, fdecay, sgain, dbknee, floor);
+		}
 	}
 
-	if (a->cplinu) {
-		bit_allocation(a->cplbap, &cplba, a->fscod, cplstrtmant, cplendmant, csnroffst, sdecay, fdecay, sgain, dbknee, floor);
+	if (cplexpstr != 0) {
+		if (a->cplinu) {
+			bit_allocation(a->cplbap, &cplba, a->fscod, a->cplexp, cplstrtmant, cplendmant, csnroffst, sdecay, fdecay, sgain, dbknee, floor);
+		}
 	}
 	int lfestrtmant = 0;
 	int lfeendmant = 7;
-	bit_allocation(a->lfebap, &lfeba, a->fscod, lfestrtmant, lfeendmant, csnroffst, sdecay, fdecay, sgain, dbknee, floor);
+	if (lfeexpstr != 0) {
+		bit_allocation(a->lfebap, &lfeba, a->fscod, a->lfeexp, lfestrtmant, lfeendmant, csnroffst, sdecay, fdecay, sgain, dbknee, floor);
+	}
 
 	// Skip bytes
 	//
@@ -607,13 +616,14 @@ static int copymant(struct ac3 *a, int bap)
 	int bits = 0;
 	switch (bap) {
 	case 0:
+		//fprintf(stderr, "mant,0\n");
 		// random noise
 		break;
 	case 1:
 		if (a->b1) {
 			a->b1--;
 		} else {
-			bits = copy(a, 5, "");
+			bits = copy(a, 5, "mant,1.66");
 			a->b1 = 2;
 		}
 		break;
@@ -621,30 +631,30 @@ static int copymant(struct ac3 *a, int bap)
 		if (a->b2) {
 			a->b2--;
 		} else {
-			bits = copy(a, 7, "");
+			bits = copy(a, 7, "mant,2.33");
 			a->b2 = 2;
 		}
 		break;
 	case 3:
-		bits = copy(a, 3, "");
+		bits = copy(a, 3, "mant,3");
 		break;
 	case 4:
 		if (a->b4) {
 			a->b4 = 0;
 		} else {
-			bits = copy(a, 7, "");
+			bits = copy(a, 7, "mant,3.5");
 			a->b4 = 1;
 		}
 		break;
 	case 5:
-		bits = copy(a, 4, "");
+		bits = copy(a, 4, "mant,5");
 		break;
 	default: // 6-15
 		if (bap > 15) {
 			// invalid
 			bap = 15;
 		}
-		bits = copy(a, quantization_tab[bap], "");
+		bits = copy(a, quantization_tab[bap], "mant,x");
 		break;
 	}
 	return bits;
@@ -655,6 +665,8 @@ int main()
 	struct bitwriter bw = {NULL};
 	struct bitreader br = {stdin};
 	ac3(&bw, &br);
-	fwrite(bw.buf, 1, bw.len, stdout);
+	fprintf(stderr, "\n");
+	fprintf(stderr, "len: %d\n", bw.len);
+	fwrite(bw.buf, 1, (size_t)bw.len, stdout);
 	return 0;
 }
