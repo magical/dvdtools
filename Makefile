@@ -13,8 +13,8 @@ layers: layers.c Makefile
 	$(CC) $(CFLAGS) -o $@ $<
 dvdbreakpoints: dvdbreakpoints.c bitreader.c bitreader.h uint.h Makefile
 	$(CC) -std=c99 -O -Wall -Wconversion -Wshadow -Wno-unused -o $@ $< bitreader.c -ldvdread
-extractaudio: extractaudio.c bitreader.c bitreader.h uint.h Makefile
-	$(CC) $(CFLAGS) -o $@ $< bitreader.c -ldvdread
+extractaudio: extractaudio.c extractaudio_windows.c bitreader.c bitreader.h uint.h Makefile
+	$(CC) $(CFLAGS) -o $@ $< extractaudio_windows.c bitreader.c -ldvdread
 ac3strip: ac3strip.c ac3bits.c ac3tab.c ac3bits.h Makefile
 	$(CC) $(CFLAGS) -ggdb -fsanitize=address -o $@ ac3strip.c ac3bits.c
 
