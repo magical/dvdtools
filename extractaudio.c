@@ -648,8 +648,6 @@ int main(int argc, char *argv[])
 
 	title_info_t tt = ifo0->tt_srpt->title[title-1];
 
-	ifoClose(ifo0);
-
 	ifo_handle_t *ifo = ifoOpen(dvd, tt.title_set_nr);
 	if (ifo == NULL) {
 		DVDClose(dvd);
@@ -772,5 +770,6 @@ int main(int argc, char *argv[])
 	DVDCloseFile(vob);
 	ifoClose(ifo);
 
+	ifoClose(ifo0);
 	DVDClose(dvd);
 }
