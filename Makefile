@@ -1,5 +1,5 @@
 
-CFLAGS=-O2 -std=c99 -pedantic -Wall -Wextra -Wconversion -Wshadow -Wno-missing-field-initializers
+CFLAGS=-O2 -std=c99 -ggdb -pedantic -Wall -Wextra -Wconversion -Wshadow -Wno-missing-field-initializers
 
 all: lsdvd catdvd layers dvdbreakpoints extractaudio
 test: bitreader_test
@@ -8,7 +8,7 @@ test: bitreader_test
 lsdvd: lsdvd.c bitreader.c bitreader.h uint.h Makefile
 	$(CC) $(CFLAGS) -o lsdvd lsdvd.c bitreader.c -ldvdread
 catdvd: catdvd.c Makefile
-	$(CC) $(CFLAGS) -ggdb -I../libdvdcss/src -o catdvd catdvd.c -ldvdread ../libdvdcss/src/.libs/libdvdcss.a
+	$(CC) $(CFLAGS) -I../libdvdcss/src -o catdvd catdvd.c -ldvdread ../libdvdcss/src/.libs/libdvdcss.a
 layers: layers.c Makefile
 	$(CC) $(CFLAGS) -o $@ $<
 dvdbreakpoints: dvdbreakpoints.c bitreader.c bitreader.h uint.h Makefile
@@ -16,7 +16,7 @@ dvdbreakpoints: dvdbreakpoints.c bitreader.c bitreader.h uint.h Makefile
 extractaudio: extractaudio.c extractaudio_windows.c bitreader.c bitreader.h uint.h Makefile
 	$(CC) $(CFLAGS) -o $@ $< extractaudio_windows.c bitreader.c -ldvdread
 ac3strip: ac3strip.c ac3bits.c ac3tab.c ac3bits.h Makefile
-	$(CC) $(CFLAGS) -ggdb -fsanitize=address -o $@ ac3strip.c ac3bits.c
+	$(CC) $(CFLAGS) -fsanitize=address -o $@ ac3strip.c ac3bits.c
 
 bitreader_test: bitreader_test.c bitreader.c bitreader.h uint.h Makefile
 	$(CC) $(CFLAGS) -o bitreader_test bitreader_test.c bitreader.c
