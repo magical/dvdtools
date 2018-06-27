@@ -672,7 +672,7 @@ int main(int argc, char *argv[])
 	if (stream_ids[a.audio_format] == 0) {
 		die("Unknown audio format");
 	}
-	if (a.sample_frequency == 1 && a.audio_format != 4) {
+	if (a.sample_frequency == 1 && a.audio_format != 4 && a.audio_format != 6) {
 		die("Unknown sample rate");
 	}
 	print_audio(&a, (int)audio);
