@@ -43,6 +43,12 @@ struct writer* open_flac(char *filename, struct lpcm_info info)
 		goto cleanup;
 	}
 
+	siStartInfo.cb = sizeof(STARTUPINFO);
+	siStartInfo.hStdInput = prd;
+	siStartInfo.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+	siStartInfo.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+	siStartInfo.dwFlags |= STARTF_USESTDHANDLES;
+
 	size_t cmdlinesize = 150 + sizeof(FLAC_PATH) + strlen(filename) + 9+9+9;
 	cmdline = malloc(cmdlinesize);
 	StringCbPrintf(
@@ -76,7 +82,7 @@ struct writer* open_flac(char *filename, struct lpcm_info info)
 		&piProcInfo
 	)) {
 		printf("CreateProcess failed: %lu\n", GetLastError());
-		return -1;
+		return NULL;
 	}
 
 	w->hProcess = piProcInfo.hProcess;
