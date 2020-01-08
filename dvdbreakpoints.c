@@ -351,7 +351,8 @@ enum {
 	DISPLAY_TIME,
 	DISPLAY_FRAMES, // cdda mm:ss:ff
 	DISPLAY_SAMPLES,
-	DISPLAY_BYTES
+	DISPLAY_BYTES,
+	DISPLAY_CHAPTERS, // for mkvmerge
 };
 
 enum {
@@ -388,6 +389,8 @@ int main(int argc, char *argv[])
 			display_mode = DISPLAY_SAMPLES;
 		} else if (streq(optarg, "bytes")) {
 			display_mode = DISPLAY_BYTES;
+		} else if (streq(optarg, "chapters")) {
+			display_mode = DISPLAY_CHAPTERS;
 		} else {
 			printf("error: unknown display mode");
 			usage();
@@ -493,6 +496,10 @@ int main(int argc, char *argv[])
 		if (i == 0) {
 			first_pts = pts;
 			last_pts = pts;
+			if (display_mode == DISPLAY_CHAPTERS) {
+				printf("CHAPTER%02d=%.2u:%.2u:%06.3f\n", 1, 0, 0, 0.0);
+				printf("CHAPTER%02dNAME=\n", 1);
+			}
 			continue;
 		}
 		u64 this_pts = pts;
@@ -509,6 +516,11 @@ int main(int argc, char *argv[])
 		} else if (display_mode == DISPLAY_FRAMES) {
 			struct time t = time_from_pts(pts);
 			printf("%.2u:%.2u:%.2u\n", t.hour*60 + t.min, t.sec, t.nano / 1000 * 75 / (uint)1e6);
+		} else if (display_mode == DISPLAY_CHAPTERS) {
+			int chapter = i+1;
+			struct time t = time_from_pts(pts);
+			printf("CHAPTER%02d=%.2u:%.2u:%06.3f\n", chapter, t.hour, t.min, t.sec + t.nano / 1e9);
+			printf("CHAPTER%02dNAME=\n", chapter);
 		} else {
 			struct time t = time_from_pts(pts);
 			printf("%.2u:%.2u:%06.3f\n", t.hour, t.min, t.sec + t.nano / 1e9);
