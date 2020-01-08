@@ -456,7 +456,12 @@ int main(int argc, char *argv[])
 	uint chan = a.channels + 1U;
 
 	if (sample_size == 0) {
-		die("Unknown sample size");
+		if (a.audio_format == 4) {
+			die("Unknown sample size");
+		}
+		if (display_mode == DISPLAY_BYTES) {
+			die("Can't display bytes with unknown sample rate");
+		}
 	}
 
 	u64 first_pts = 0, last_pts = 0;
